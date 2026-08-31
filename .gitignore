@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+TestResults/
+artifacts/
+.tmp/
+*.user
+*.suo
+*.nupkg
+*.snupkg
+*.log
+*.cache
+*.DotSettings.user
