@@ -11,6 +11,7 @@ public sealed class HttpDownloadEngineTests : IDisposable
     private const int PayloadSize = 5 * 1024 * 1024;
 
     private readonly byte[] _payload = CreateDeterministicPayload(PayloadSize);
+    private readonly byte[] _small = CreateDeterministicPayload(4096);
     private readonly string _workingDirectory = Directory.CreateTempSubdirectory("sdm-tests-").FullName;
 
     [Fact]
@@ -19,18 +20,17 @@ public sealed class HttpDownloadEngineTests : IDisposable
         using LocalHttpServer server = new(ServeAsync);
         await using ServiceProvider provider = BuildProvider();
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
-        string destination = Path.Combine(_workingDirectory, "payload.bin");
 
         DownloadResult result = await engine.DownloadAsync(
-            new DownloadRequest(server.Url("file"), destination),
+            new DownloadRequest(server.Url("payload.bin"), _workingDirectory),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        byte[] written = await File.ReadAllBytesAsync(destination, TestContext.Current.CancellationToken);
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
 
-        Assert.Equal(destination, result.DestinationPath);
+        Assert.Equal(Path.Combine(_workingDirectory, "payload.bin"), result.DestinationPath);
         Assert.Equal(PayloadSize, result.BytesWritten);
         Assert.Equal(Hash(_payload), Hash(written));
-        Assert.False(File.Exists(destination + ".part"));
+        Assert.False(File.Exists(result.DestinationPath + ".part"));
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public sealed class HttpDownloadEngineTests : IDisposable
         List<DownloadProgress> reports = [];
 
         await engine.DownloadAsync(
-            new DownloadRequest(server.Url("slow"), Path.Combine(_workingDirectory, "progress.bin")),
+            new DownloadRequest(server.Url("slow.bin"), _workingDirectory),
             new SynchronousProgress<DownloadProgress>(reports.Add),
             TestContext.Current.CancellationToken);
 
@@ -65,18 +65,16 @@ public sealed class HttpDownloadEngineTests : IDisposable
         using LocalHttpServer server = new(ServeAsync);
         await using ServiceProvider provider = BuildProvider();
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
-        string destination = Path.Combine(_workingDirectory, "cancelled.bin");
 
         using CancellationTokenSource cancellation = new();
         SynchronousProgress<DownloadProgress> progress = new(_ => cancellation.Cancel());
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.DownloadAsync(
-            new DownloadRequest(server.Url("slow"), destination),
+            new DownloadRequest(server.Url("slow.bin"), _workingDirectory),
             progress,
             cancellation.Token));
 
-        Assert.False(File.Exists(destination), "A cancelled download must not leave a file at the destination.");
-        Assert.False(File.Exists(destination + ".part"), "The partial file must be cleaned up.");
+        Assert.Empty(Directory.GetFiles(_workingDirectory));
     }
 
     [Fact]
@@ -85,16 +83,14 @@ public sealed class HttpDownloadEngineTests : IDisposable
         using LocalHttpServer server = new(ServeAsync);
         await using ServiceProvider provider = BuildProvider();
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
-        string destination = Path.Combine(_workingDirectory, "missing.bin");
 
         HttpRequestException exception = await Assert.ThrowsAsync<HttpRequestException>(
             () => engine.DownloadAsync(
-                new DownloadRequest(server.Url("missing"), destination),
+                new DownloadRequest(server.Url("missing.bin"), _workingDirectory),
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HttpStatusCode.NotFound, exception.StatusCode);
-        Assert.False(File.Exists(destination));
-        Assert.False(File.Exists(destination + ".part"));
+        Assert.Empty(Directory.GetFiles(_workingDirectory));
     }
 
     [Fact]
@@ -104,14 +100,13 @@ public sealed class HttpDownloadEngineTests : IDisposable
         await using ServiceProvider provider = BuildProvider();
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
         List<DownloadProgress> reports = [];
-        string destination = Path.Combine(_workingDirectory, "chunked.bin");
 
         DownloadResult result = await engine.DownloadAsync(
-            new DownloadRequest(server.Url("chunked"), destination),
+            new DownloadRequest(server.Url("chunked.bin"), _workingDirectory),
             new SynchronousProgress<DownloadProgress>(reports.Add),
             TestContext.Current.CancellationToken);
 
-        byte[] written = await File.ReadAllBytesAsync(destination, TestContext.Current.CancellationToken);
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
 
         Assert.Equal(PayloadSize, result.BytesWritten);
         Assert.Null(reports[0].TotalBytes);
@@ -120,18 +115,67 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAsync_TakesTheFileNameFromContentDisposition()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("opaque-id"), _workingDirectory),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.Combine(_workingDirectory, "quarterly report.pdf"), result.DestinationPath);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_CannotBeTrickedIntoWritingOutsideTheDestinationDirectory()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("hostile"), _workingDirectory),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.Combine(_workingDirectory, "escaped.txt"), result.DestinationPath);
+        Assert.Equal(_workingDirectory, Path.GetDirectoryName(result.DestinationPath));
+        Assert.False(File.Exists(Path.Combine(_workingDirectory, "..", "..", "escaped.txt")));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_DoesNotOverwriteAnExistingFile()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+        DownloadRequest request = new(server.Url("opaque-id"), _workingDirectory);
+
+        DownloadResult first = await engine.DownloadAsync(
+            request, cancellationToken: TestContext.Current.CancellationToken);
+        DownloadResult second = await engine.DownloadAsync(
+            request, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.Combine(_workingDirectory, "quarterly report.pdf"), first.DestinationPath);
+        Assert.Equal(Path.Combine(_workingDirectory, "quarterly report (1).pdf"), second.DestinationPath);
+        Assert.True(File.Exists(first.DestinationPath));
+    }
+
+    [Fact]
     public async Task DownloadAsync_CreatesTheDestinationDirectory()
     {
         using LocalHttpServer server = new(ServeAsync);
         await using ServiceProvider provider = BuildProvider();
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
-        string destination = Path.Combine(_workingDirectory, "nested", "deeper", "payload.bin");
+        string nested = Path.Combine(_workingDirectory, "nested", "deeper");
 
-        await engine.DownloadAsync(
-            new DownloadRequest(server.Url("file"), destination),
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("payload.bin"), nested),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.True(File.Exists(destination));
+        Assert.True(File.Exists(result.DestinationPath));
+        Assert.Equal(nested, Path.GetDirectoryName(result.DestinationPath));
     }
 
     private static ServiceProvider BuildProvider()
@@ -146,19 +190,31 @@ public sealed class HttpDownloadEngineTests : IDisposable
     {
         switch (context.Request.Url?.AbsolutePath)
         {
-            case "/file":
+            case "/payload.bin":
                 context.Response.ContentLength64 = _payload.Length;
                 await context.Response.OutputStream.WriteAsync(_payload, cancellationToken);
                 break;
 
-            case "/slow":
+            case "/slow.bin":
                 context.Response.ContentLength64 = _payload.Length;
                 await WriteInChunksAsync(context, cancellationToken);
                 break;
 
-            case "/chunked":
+            case "/chunked.bin":
                 context.Response.SendChunked = true;
                 await WriteInChunksAsync(context, cancellationToken);
+                break;
+
+            case "/opaque-id":
+                context.Response.AddHeader("Content-Disposition", "attachment; filename=\"quarterly report.pdf\"");
+                context.Response.ContentLength64 = _small.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
+                break;
+
+            case "/hostile":
+                context.Response.AddHeader("Content-Disposition", "attachment; filename=\"../../escaped.txt\"");
+                context.Response.ContentLength64 = _small.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
                 break;
 
             default:

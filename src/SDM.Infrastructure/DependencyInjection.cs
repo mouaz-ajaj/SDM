@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.DependencyInjection;
+using SDM.Application.Downloads;
 using SDM.Core.Downloads;
 using SDM.Infrastructure.Downloads;
 
@@ -29,6 +30,7 @@ public static class DependencyInjection
             });
 
         services.AddSingleton<IDownloadEngine, HttpDownloadEngine>();
+        services.AddSingleton<IDownloadFolder, DefaultDownloadFolder>();
         return services;
     }
 }

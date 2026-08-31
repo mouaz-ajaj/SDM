@@ -1,0 +1,155 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Typography -->
+
+  <Style Selector="TextBlock.wordmark">
+    <Setter Property="FontSize" Value="27" />
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="LetterSpacing" Value="3" />
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.tagline">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="LetterSpacing" Value="1.4" />
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.sectionLabel">
+    <Setter Property="FontSize" Value="10.5" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="LetterSpacing" Value="1.6" />
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.fileName">
+    <Setter Property="FontSize" Value="16" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+  </Style>
+
+  <Style Selector="TextBlock.metric">
+    <Setter Property="FontSize" Value="12.5" />
+    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.footnote">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.error">
+    <Setter Property="FontSize" Value="12.5" />
+    <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <!-- Card: the single container shape the whole layout is built from -->
+
+  <Style Selector="Border.card">
+    <Setter Property="Background" Value="{StaticResource SurfaceCardBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource StrokeBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="14" />
+    <Setter Property="Padding" Value="26,22" />
+  </Style>
+
+  <Style Selector="Border.chip">
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource StrokeStrongBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="20" />
+    <Setter Property="Padding" Value="13,6" />
+  </Style>
+
+  <!--
+    Primary button: a full custom template rather than restyling Fluent's, so hover and
+    pressed states are deterministic instead of fighting theme resource lookups.
+  -->
+
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="{StaticResource BrandGradientBrush}" />
+    <Setter Property="Foreground" Value="#FFFFFF" />
+    <Setter Property="FontSize" Value="13.5" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Padding" Value="26,0" />
+    <Setter Property="Height" Value="46" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="Shell"
+                Background="{TemplateBinding Background}"
+                CornerRadius="11"
+                Padding="{TemplateBinding Padding}">
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+
+  <Style Selector="Button.primary:pointerover /template/ Border#Shell">
+    <Setter Property="Background" Value="{StaticResource BrandGradientHoverBrush}" />
+  </Style>
+
+  <Style Selector="Button.primary:pressed /template/ Border#Shell">
+    <Setter Property="Opacity" Value="0.82" />
+  </Style>
+
+  <Style Selector="Button.primary:disabled /template/ Border#Shell">
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+  </Style>
+
+  <Style Selector="Button.primary:disabled">
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+    <Setter Property="Cursor" Value="Arrow" />
+  </Style>
+
+  <!-- Address field -->
+
+  <Style Selector="TextBox.address">
+    <Setter Property="Height" Value="46" />
+    <Setter Property="FontSize" Value="13.5" />
+    <Setter Property="Padding" Value="16,0" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="CornerRadius" Value="11" />
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    <Setter Property="CaretBrush" Value="{StaticResource BrandSkyBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="BorderBrush" Value="{StaticResource StrokeBrush}" />
+    <Setter Property="SelectionBrush" Value="{StaticResource BrandBlueBrush}" />
+  </Style>
+
+  <Style Selector="TextBox.address /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource StrokeBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="11" />
+  </Style>
+
+  <Style Selector="TextBox.address:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="BorderBrush" Value="{StaticResource StrokeStrongBrush}" />
+  </Style>
+
+  <Style Selector="TextBox.address:focus /template/ Border#PART_BorderElement">
+    <Setter Property="BorderBrush" Value="{StaticResource BrandSkyBrush}" />
+  </Style>
+
+  <!-- Progress -->
+
+  <Style Selector="ProgressBar.brand">
+    <Setter Property="Height" Value="8" />
+    <Setter Property="MinHeight" Value="8" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Foreground" Value="{StaticResource BrandGradientBrush}" />
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+</Styles>

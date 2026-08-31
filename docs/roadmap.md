@@ -65,10 +65,16 @@ Do not touch `src/SDM.Desktop/` or `src/SDM.Database/`.
 - A 404 surfaces as a meaningful exception, not a silent empty file.
 - Progress is reported more than once and the final report equals the file length.
 
-### Phase 2.2 — First real UI
+### Phase 2.2 — First real UI — CODE COMPLETE, HAND-VERIFICATION PENDING
 
 **Goal:** paste a URL into the app, press Download, watch it finish. This is the
 phase where SDM stops being a shell.
+
+> **Blocked locally.** Smart App Control is enforced on the development machine
+> (`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState = 1`),
+> so it refuses to load the freshly built, unsigned SDM assemblies. The application
+> and every test that touches `SDM.Application.dll` therefore cannot run here; CI is
+> the only verification until Smart App Control is turned off. See *Open decisions*.
 
 **Scope**
 - `SDM.Application`: a `StartDownloadUseCase`. The UI calls this, never
@@ -219,6 +225,7 @@ work.
 | License | FFmpeg is LGPL/GPL depending on build; shipping its binaries constrains the choice. Decide before Track D. | Open |
 | Host ↔ app IPC | Named pipe vs. loopback HTTP. Locks in at Phase 4.1. | Open |
 | Installer technology | MSIX vs. Inno Setup. Affects native-host registration. | Open |
+| Smart App Control | Enforced on the dev machine, so locally built assemblies cannot load and neither the app nor most tests can run there. Turning it off is irreversible without reinstalling Windows; leaving it on means CI is the only place the app is ever executed. | Open — blocks local verification |
 
 ## Non-goals (unchanged from the product scope)
 

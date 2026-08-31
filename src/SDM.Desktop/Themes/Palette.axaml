@@ -1,0 +1,64 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    Sampled from the SDM mark: the "S" runs from a deep electric blue at its base to a
+    bright sky blue at its tip, and the "DM" wordmark is a blue-leaning charcoal.
+    Every colour below is derived from those three; nothing is invented.
+  -->
+  <Color x:Key="BrandDeepColor">#0B3FDE</Color>
+  <Color x:Key="BrandBlueColor">#1470F0</Color>
+  <Color x:Key="BrandSkyColor">#17B4FF</Color>
+  <Color x:Key="BrandInkColor">#222B39</Color>
+
+  <!-- Surfaces: the charcoal ink pushed down towards black, keeping its blue cast. -->
+  <Color x:Key="SurfaceBaseColor">#0A0F16</Color>
+  <Color x:Key="SurfaceDeepColor">#070B11</Color>
+  <Color x:Key="SurfaceCardColor">#111A25</Color>
+  <Color x:Key="SurfaceInsetColor">#0C141E</Color>
+  <Color x:Key="StrokeColor">#1D2A3A</Color>
+  <Color x:Key="StrokeStrongColor">#2A3E55</Color>
+
+  <Color x:Key="TextPrimaryColor">#F3F7FC</Color>
+  <Color x:Key="TextSecondaryColor">#A2B4C9</Color>
+  <Color x:Key="TextMutedColor">#64798F</Color>
+  <Color x:Key="DangerColor">#FF6B6B</Color>
+  <Color x:Key="SuccessColor">#3DDC97</Color>
+
+  <SolidColorBrush x:Key="BrandBlueBrush" Color="{StaticResource BrandBlueColor}" />
+  <SolidColorBrush x:Key="BrandSkyBrush" Color="{StaticResource BrandSkyColor}" />
+  <SolidColorBrush x:Key="SurfaceCardBrush" Color="{StaticResource SurfaceCardColor}" />
+  <SolidColorBrush x:Key="SurfaceInsetBrush" Color="{StaticResource SurfaceInsetColor}" />
+  <SolidColorBrush x:Key="StrokeBrush" Color="{StaticResource StrokeColor}" />
+  <SolidColorBrush x:Key="StrokeStrongBrush" Color="{StaticResource StrokeStrongColor}" />
+  <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimaryColor}" />
+  <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}" />
+  <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMutedColor}" />
+  <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
+  <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource SuccessColor}" />
+
+  <!-- The mark's own gradient, running bottom-left to top-right exactly as the logo does. -->
+  <LinearGradientBrush x:Key="BrandGradientBrush" StartPoint="0%,100%" EndPoint="100%,0%">
+    <GradientStop Color="{StaticResource BrandDeepColor}" Offset="0" />
+    <GradientStop Color="{StaticResource BrandSkyColor}" Offset="1" />
+  </LinearGradientBrush>
+
+  <LinearGradientBrush x:Key="BrandGradientHoverBrush" StartPoint="0%,100%" EndPoint="100%,0%">
+    <GradientStop Color="#1A55F5" Offset="0" />
+    <GradientStop Color="#3FC4FF" Offset="1" />
+  </LinearGradientBrush>
+
+  <!-- A barely-there wash so the window has depth without competing with the cards. -->
+  <LinearGradientBrush x:Key="WindowBackgroundBrush" StartPoint="0%,0%" EndPoint="60%,100%">
+    <GradientStop Color="#0D1520" Offset="0" />
+    <GradientStop Color="{StaticResource SurfaceBaseColor}" Offset="0.55" />
+    <GradientStop Color="{StaticResource SurfaceDeepColor}" Offset="1" />
+  </LinearGradientBrush>
+
+  <LinearGradientBrush x:Key="HairlineBrush" StartPoint="0%,0%" EndPoint="100%,0%">
+    <GradientStop Color="{StaticResource BrandBlueColor}" Offset="0" />
+    <GradientStop Color="{StaticResource BrandSkyColor}" Offset="0.5" />
+    <GradientStop Color="#00000000" Offset="1" />
+  </LinearGradientBrush>
+
+</ResourceDictionary>

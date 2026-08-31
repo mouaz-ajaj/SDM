@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SDM.Application.ApplicationInfo;
+using SDM.Application.Downloads;
 
 namespace SDM.Application;
 
@@ -18,6 +19,7 @@ public static class DependencyInjection
             .ValidateOnStart();
 
         services.AddSingleton<IApplicationInfoService, ApplicationInfoService>();
+        services.AddSingleton<IStartDownloadUseCase, StartDownloadUseCase>();
         return services;
     }
 }

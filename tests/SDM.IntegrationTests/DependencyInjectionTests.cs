@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using SDM.Application.ApplicationInfo;
+using SDM.Application.Downloads;
+using SDM.Core.Downloads;
 using SDM.Desktop;
 using SDM.Desktop.ViewModels;
 
@@ -17,7 +19,17 @@ public sealed class DependencyInjectionTests
 
         Assert.Equal("SDM", applicationInfo.Name);
         Assert.Equal("Speed Download Manager", viewModel.FullName);
-        Assert.Equal("Project foundation initialized", viewModel.FoundationStatus);
+        Assert.False(string.IsNullOrWhiteSpace(viewModel.Version));
+    }
+
+    [Fact]
+    public void CompositionRoot_WiresTheDownloadPipelineEndToEnd()
+    {
+        using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider();
+
+        Assert.NotNull(provider.GetRequiredService<IDownloadEngine>());
+        Assert.NotNull(provider.GetRequiredService<IStartDownloadUseCase>());
+        Assert.False(string.IsNullOrWhiteSpace(provider.GetRequiredService<IDownloadFolder>().GetPath()));
     }
 
     [Fact]
