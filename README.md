@@ -58,4 +58,4 @@ The shell displays SDM product metadata and confirms that the foundation is init
 
 Stage 1 does not perform network requests, create download files, calculate progress, persist jobs, or integrate with browsers. It has no queue, pause/resume support, media extraction, HLS/DASH handling, installer, updater, system tray, or finished production interface.
 
-See [product scope](docs/product-scope.md), [architecture](docs/architecture.md), and the [architecture decision records](docs/decisions/) for the decisions that constrain later stages.
+See [roadmap](docs/roadmap.md) for the phase-by-phase plan, and [product scope](docs/product-scope.md), [architecture](docs/architecture.md), and the [architecture decision records](docs/decisions/) for the decisions that constrain later stages.
