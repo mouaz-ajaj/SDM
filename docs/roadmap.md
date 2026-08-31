@@ -191,6 +191,26 @@ This is where the *Speed* in the name is earned.
 
 ---
 
+### Phase 3.4 — Logs that reach the user — DONE
+
+Raised in the first review and left open ever since: the application is built as a
+Windows executable, so it has no console. Every line it logged went nowhere unless
+stdout happened to be redirected, and a failure during startup left no trace at all.
+
+**Scope**
+- A rolling file log under `%LOCALAPPDATA%SDMogs`, written synchronously so the
+  entries immediately before a crash are on disk rather than in a queue.
+- Daily files, a size cap that rolls, and a retention window.
+- `CrashLog`, which records a startup failure without the dependency container — the
+  container being what failed is exactly the case that used to vanish.
+
+**Acceptance**
+- Launching the executable with no redirection leaves a readable log on disk.
+- The log can be opened while the application is still running.
+- Old logs are removed; a growing log rolls instead of filling the disk.
+
+---
+
 ## Track C — Browser integration (4–6 sessions)
 
 The hardest track. It is here — rather than earlier — because it hands URLs to a

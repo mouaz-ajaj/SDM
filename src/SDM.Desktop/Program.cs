@@ -2,6 +2,7 @@ using Avalonia;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SDM.Application.ApplicationInfo;
+using SDM.Infrastructure.Logging;
 
 namespace SDM.Desktop;
 
@@ -20,7 +21,9 @@ internal static class Program
 
             logger.LogInformation("Starting {ApplicationName}.", appInfo.FullName);
             logger.LogInformation("Application version: {ApplicationVersion}.", appInfo.Version);
-            logger.LogInformation("Dependencies initialized successfully.");
+            logger.LogInformation(
+                "Writing diagnostics to {LogDirectory}.",
+                services.GetRequiredService<FileLoggerProvider>().Directory);
 
             BuildAvaloniaApp(services).StartWithClassicDesktopLifetime(args);
 
@@ -29,9 +32,17 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            ILogger? logger = services?.GetService<ILoggerFactory>()?.CreateLogger("SDM.Startup");
-            logger?.LogCritical(exception, "Unexpected startup failure.");
+            // The container may be the very thing that failed, so this cannot rely on it.
+            // Without a console to print to, a file is the only place a startup crash can
+            // leave a trace the user is able to find.
+            string report = CrashLog.Write(exception);
+
+            services?.GetService<ILoggerFactory>()?
+                .CreateLogger("SDM.Startup")
+                .LogCritical(exception, "Unexpected startup failure.");
+
             Console.Error.WriteLine($"SDM failed to start: {exception.Message}");
+            Console.Error.WriteLine($"Details written to {report}");
             return 1;
         }
         finally

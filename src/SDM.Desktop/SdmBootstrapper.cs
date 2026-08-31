@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using SDM.Application;
 using SDM.Database;
 using SDM.Infrastructure;
+using SDM.Infrastructure.Logging;
 
 namespace SDM.Desktop;
 
@@ -18,11 +19,15 @@ public static class SdmBootstrapper
         services.AddLogging(builder =>
         {
             builder.ClearProviders();
+
+            // The console provider only reaches anyone when stdout has been redirected;
+            // the file is what a user running the packaged application can actually read.
             builder.AddSimpleConsole(options =>
             {
                 options.SingleLine = true;
                 options.TimestampFormat = "HH:mm:ss ";
             });
+            builder.AddSdmFileLogging(configuration);
             builder.SetMinimumLevel(LogLevel.Information);
         });
 
