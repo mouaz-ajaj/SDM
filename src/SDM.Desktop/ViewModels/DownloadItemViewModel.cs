@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using SDM.Application.Downloads;
 using SDM.Core.Downloads;
 
@@ -9,7 +10,8 @@ namespace SDM.Desktop.ViewModels;
 
 /// <summary>
 /// One row in the transfer list. Owns its own cancellation source, so pausing or
-/// cancelling a row never touches its neighbours.
+/// cancelling a row never touches its neighbours, and writes itself to the repository
+/// on every state change so the list survives the application closing.
 /// </summary>
 public sealed partial class DownloadItemViewModel : ObservableObject, IDisposable
 {
@@ -21,9 +23,15 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private const double MinimumSampleSeconds = 0.15;
 
     private readonly IDownloadScheduler _scheduler;
+    private readonly IDownloadRepository _repository;
+    private readonly ILogger _logger;
+    private readonly Guid _id;
     private readonly string _address;
+    private readonly DateTimeOffset _createdAt;
 
     private CancellationTokenSource _cancellation = new();
+    private long _bytesReceived;
+    private long? _totalBytes;
     private long _lastBytes;
     private long _lastTimestamp;
     private double _bytesPerSecond;
@@ -67,14 +75,84 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private bool _serverSupportsResume = true;
 
-    public DownloadItemViewModel(IDownloadScheduler scheduler, string address)
+    private DownloadItemViewModel(
+        IDownloadScheduler scheduler,
+        IDownloadRepository repository,
+        ILogger logger,
+        Guid id,
+        string address,
+        DateTimeOffset createdAt)
+    {
+        _scheduler = scheduler;
+        _repository = repository;
+        _logger = logger;
+        _id = id;
+        _address = address;
+        _createdAt = createdAt;
+        _fileName = PreviewFileName(address);
+    }
+
+    public static DownloadItemViewModel Create(
+        IDownloadScheduler scheduler,
+        IDownloadRepository repository,
+        ILogger logger,
+        string address)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(logger);
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
 
-        _scheduler = scheduler;
-        _address = address.Trim();
-        _fileName = PreviewFileName(_address);
+        DownloadItemViewModel item = new(
+            scheduler, repository, logger, Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow);
+
+        item.Persist();
+        return item;
+    }
+
+    /// <summary>Rebuilds a row from the previous run.</summary>
+    public static DownloadItemViewModel Restore(
+        IDownloadScheduler scheduler,
+        IDownloadRepository repository,
+        ILogger logger,
+        DownloadJob job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+
+        DownloadItemViewModel item = new(
+            scheduler, repository, logger, job.Id, job.Address, job.CreatedAt)
+        {
+            DestinationPath = job.DestinationPath,
+            _bytesReceived = job.BytesReceived,
+            _totalBytes = job.TotalBytes,
+            IsIndeterminate = false,
+        };
+
+        if (job.DestinationPath is { Length: > 0 } path)
+        {
+            item.FileName = Path.GetFileName(path);
+        }
+
+        // Nothing is transferring in a process that has only just started, so anything
+        // recorded as running or queued is really paused, waiting for the resume button.
+        item.Status = job.Status is DownloadStatus.Running or DownloadStatus.Pending
+            ? DownloadStatus.Paused
+            : job.Status;
+
+        item.Percentage = job.TotalBytes is > 0
+            ? (double)job.BytesReceived / job.TotalBytes.Value * 100d
+            : 0;
+
+        item.Detail = item.Status switch
+        {
+            DownloadStatus.Completed => job.Detail ?? "Complete",
+            DownloadStatus.Paused when job.TotalBytes is { } total =>
+                $"Paused at {FormatBytes(job.BytesReceived)} of {FormatBytes(total)}",
+            DownloadStatus.Paused => "Paused",
+            _ => job.Detail ?? item.Status.ToString(),
+        };
+
+        return item;
     }
 
     public string Address => _address;
@@ -111,12 +189,15 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
             DestinationPath = result.DestinationPath;
             FileName = Path.GetFileName(result.DestinationPath);
+            _bytesReceived = result.BytesWritten;
+            _totalBytes = result.BytesWritten;
             Percentage = 100;
             IsIndeterminate = false;
-            Status = DownloadStatus.Completed;
-            Detail = $"{FormatBytes(result.BytesWritten)} · {Path.GetDirectoryName(result.DestinationPath)}";
             SpeedText = string.Empty;
             RemainingText = string.Empty;
+            Settle(
+                DownloadStatus.Completed,
+                $"{FormatBytes(result.BytesWritten)} · {Path.GetDirectoryName(result.DestinationPath)}");
         }
         catch (OperationCanceledException)
         {
@@ -171,9 +252,22 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     /// <summary>Removes the partial file for a row the user is throwing away.</summary>
     public void DiscardPartial()
     {
-        if (DestinationPath is { } path)
+        if (DestinationPath is { Length: > 0 } path)
         {
             _scheduler.Discard(path);
+        }
+    }
+
+    /// <summary>Removes the row from the saved list.</summary>
+    public async Task ForgetAsync()
+    {
+        try
+        {
+            await _repository.DeleteAsync(_id);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Could not remove transfer {JobId} from the database.", _id);
         }
     }
 
@@ -239,6 +333,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         DestinationPath = plan.DestinationPath;
         FileName = Path.GetFileName(plan.DestinationPath);
         ServerSupportsResume = plan.ServerSupportsResume;
+        _totalBytes = plan.TotalBytes;
+        _bytesReceived = plan.ResumedFrom;
         PauseCommand.NotifyCanExecuteChanged();
 
         if (plan.ResumedFrom > 0)
@@ -249,6 +345,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         // Anchor the rate window at the resume point so the first sample is not a spike.
         _lastBytes = plan.ResumedFrom;
         _lastTimestamp = Stopwatch.GetTimestamp();
+
+        // The destination is worth recording immediately: without it a killed process
+        // leaves a partial file that no row knows how to claim.
+        Persist();
     }
 
     private void OnRetry(DownloadRetry retry)
@@ -272,6 +372,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         Status = DownloadStatus.Running;
         IsIndeterminate = progress.TotalBytes is null;
         Percentage = progress.Percentage ?? 0;
+        _bytesReceived = progress.BytesReceived;
+        _totalBytes = progress.TotalBytes;
 
         Detail = progress.TotalBytes is { } total
             ? $"{FormatBytes(progress.BytesReceived)} of {FormatBytes(total)}"
@@ -304,6 +406,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             : string.Empty;
     }
 
+    /// <summary>
+    /// Records a final state. Every call is a meaningful transition, which is exactly
+    /// when the row is written to the database — never on a timer, and never per chunk.
+    /// </summary>
     private void Settle(DownloadStatus status, string detail)
     {
         Status = status;
@@ -312,6 +418,40 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         SpeedText = string.Empty;
         RemainingText = string.Empty;
         _bytesPerSecond = 0;
+
+        Persist();
+    }
+
+    private void Persist()
+    {
+        DownloadJob job = new()
+        {
+            Id = _id,
+            Address = _address,
+            DestinationPath = DestinationPath,
+            BytesReceived = _bytesReceived,
+            TotalBytes = _totalBytes,
+            Status = Status,
+            Detail = Detail,
+            CreatedAt = _createdAt,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+
+        // Saving must never take the window down or block the transfer, so it runs
+        // detached and reports failures to the log instead.
+        _ = SaveAsync(job);
+    }
+
+    private async Task SaveAsync(DownloadJob job)
+    {
+        try
+        {
+            await _repository.SaveAsync(job);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Could not save transfer {JobId}.", job.Id);
+        }
     }
 
     private static string PreviewFileName(string address) =>

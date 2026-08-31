@@ -28,7 +28,7 @@ public static class SdmBootstrapper
 
         services.AddSdmApplication(configuration);
         services.AddSdmInfrastructure();
-        services.AddSdmDatabase();
+        services.AddSdmDatabase(configuration);
         services.AddSdmDesktop();
 
         return services.BuildServiceProvider(new ServiceProviderOptions

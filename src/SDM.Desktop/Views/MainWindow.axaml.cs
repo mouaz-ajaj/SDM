@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using SDM.Desktop.ViewModels;
 
 namespace SDM.Desktop.Views;
@@ -18,9 +19,20 @@ public sealed partial class MainWindow : Window
         DataContext = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
     }
 
+    /// <summary>Restores the previous session once the window is up, not during construction.</summary>
+    protected override async void OnLoaded(RoutedEventArgs e)
+    {
+        base.OnLoaded(e);
+
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            await viewModel.LoadAsync();
+        }
+    }
+
     /// <summary>
-    /// Holds the window open just long enough for in-flight transfers to be cancelled and
-    /// their partial files cleaned up. Exiting immediately would orphan every .part file.
+    /// Holds the window open just long enough for in-flight transfers to be stopped and
+    /// their state written. Exiting immediately would lose the last status of each row.
     /// </summary>
     protected override void OnClosing(WindowClosingEventArgs e)
     {

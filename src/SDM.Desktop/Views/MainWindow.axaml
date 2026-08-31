@@ -173,7 +173,7 @@
     <!-- Footer -->
     <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Margin="0,20,0,0">
       <TextBlock Classes="footnote" Text="WINDOWS-FIRST · PORTABLE ARCHITECTURE" LetterSpacing="1.2" />
-      <TextBlock Grid.Column="1" Classes="footnote" Text="Persistent history arrives in the next phase" />
+      <TextBlock Grid.Column="1" Classes="footnote" Text="Transfers are remembered between sessions" />
     </Grid>
 
   </Grid>

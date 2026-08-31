@@ -138,7 +138,7 @@ resume exists, this restriction should be lifted.
 
 ## Track B — Make it reliable (3 sessions)
 
-### Phase 3.1 — Resume — CODE COMPLETE, HAND-VERIFICATION PENDING
+### Phase 3.1 — Resume — DONE
 
 **Scope**
 - Probe `Accept-Ranges`; download into a `.part` file; on resume send
@@ -153,13 +153,10 @@ resume exists, this restriction should be lifted.
 - Kill the process mid-download, reopen, resume completes correctly.
 - A `Range`-less server degrades gracefully instead of producing a corrupt file.
 
-**Known limitation until Phase 3.2.** A partial file is matched to its URL by a
-`.part.meta` sidecar, which survives the process being killed. But the application
-itself forgets the queue on exit, so resuming after a restart means pasting the same
-address again; the engine then recognises the partial and continues. Persistence
-turns that into a list that simply reappears.
+Verified by hand: closing the application mid-transfer left `1GB.bin.part` beside a
+sidecar naming the owning URL, its total length and Hetzner's own ETag.
 
-### Phase 3.2 — SQLite persistence
+### Phase 3.2 — SQLite persistence — DONE
 
 **Scope**
 - `SDM.Database`: schema, migration on startup, `IDownloadRepository`
