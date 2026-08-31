@@ -110,6 +110,59 @@
     <Setter Property="Cursor" Value="Arrow" />
   </Style>
 
+  <!-- Secondary button: the quieter half of a pair, never competing with the primary -->
+
+  <Style Selector="Button.secondary">
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Padding" Value="20,0" />
+    <Setter Property="Height" Value="46" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="Shell"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{StaticResource StrokeStrongBrush}"
+                BorderThickness="1"
+                CornerRadius="11"
+                Padding="{TemplateBinding Padding}">
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Content}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+
+  <Style Selector="Button.secondary:pointerover /template/ Border#Shell">
+    <Setter Property="BorderBrush" Value="{StaticResource BrandSkyBrush}" />
+  </Style>
+
+  <Style Selector="Button.secondary:disabled">
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+    <Setter Property="Cursor" Value="Arrow" />
+  </Style>
+
+  <!-- Settings controls -->
+
+  <Style Selector="NumericUpDown.setting">
+    <Setter Property="Width" Value="122" />
+    <Setter Property="Height" Value="36" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="HorizontalContentAlignment" Value="Right" />
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource StrokeBrush}" />
+    <Setter Property="CornerRadius" Value="9" />
+  </Style>
+
+  <Style Selector="CheckBox">
+    <Setter Property="FontSize" Value="12.5" />
+  </Style>
+
   <!-- Address field -->
 
   <Style Selector="TextBox.address">

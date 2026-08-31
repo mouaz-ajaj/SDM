@@ -11,11 +11,18 @@ public static class DependencyInjection
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddSingleton<StorageProviderSaveLocationPicker>();
+        services.AddSingleton<StorageProviderFolderPicker>();
+        services.AddSingleton<IFolderPicker>(
+            provider => provider.GetRequiredService<StorageProviderFolderPicker>());
+
+        services.AddSingleton<DialogSaveLocationPicker>();
         services.AddSingleton<ISaveLocationPicker>(
-            provider => provider.GetRequiredService<StorageProviderSaveLocationPicker>());
+            provider => provider.GetRequiredService<DialogSaveLocationPicker>());
+
         services.AddTransient<MainWindowViewModel>();
         services.AddTransient<MainWindow>();
+        services.AddTransient<SettingsViewModel>();
+        services.AddTransient<SettingsWindow>();
         return services;
     }
 }

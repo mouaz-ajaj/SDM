@@ -580,8 +580,10 @@ public sealed class HttpDownloadEngineTests : IDisposable
         ServiceCollection services = new();
         services.AddLogging();
         services.AddSingleton<IOptions<DownloadOptions>>(Options.Create(options));
+        services.AddSingleton<IOptionsMonitor<DownloadOptions>>(new TestOptions<DownloadOptions>(options));
         services.AddSingleton<IConnectionBudget>(new HostConnectionBudget(Options.Create(options)));
-        services.AddSingleton<IDownloadLayout>(new CategoryDownloadLayout(Options.Create(options)));
+        services.AddSingleton<IDownloadLayout>(
+            new CategoryDownloadLayout(new TestOptions<DownloadOptions>(options)));
         services.AddSdmInfrastructure();
         return services.BuildServiceProvider();
     }

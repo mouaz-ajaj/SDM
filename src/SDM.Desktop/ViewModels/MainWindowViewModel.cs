@@ -18,6 +18,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IDownloadRepository _repository;
     private readonly IDownloadFolder _downloadFolder;
     private readonly ISaveLocationPicker _picker;
+    private readonly DialogSaveLocationPicker _dialogs;
     private readonly DownloadOptions _options;
     private readonly ILogger<MainWindowViewModel> _logger;
 
@@ -34,6 +35,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IDownloadRepository repository,
         IDownloadFolder downloadFolder,
         ISaveLocationPicker picker,
+        DialogSaveLocationPicker dialogs,
         IOptions<DownloadOptions> options,
         ILogger<MainWindowViewModel> logger)
     {
@@ -42,6 +44,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(downloadFolder);
         ArgumentNullException.ThrowIfNull(picker);
+        ArgumentNullException.ThrowIfNull(dialogs);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -50,6 +53,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _repository = repository;
         _downloadFolder = downloadFolder;
         _picker = picker;
+        _dialogs = dialogs;
         _options = options.Value;
         _logger = logger;
 
@@ -139,23 +143,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </summary>
     private async Task<DownloadDestination?> ChooseDestinationAsync(string address, Uri source)
     {
-        string suggested;
+        DownloadProbe probe;
 
         try
         {
-            DownloadProbe probe = await _scheduler.ProbeAsync(address);
-            suggested = probe.FileName;
+            probe = await _scheduler.ProbeAsync(address);
         }
         catch (Exception exception) when (exception is DownloadFailedException or ArgumentException)
         {
             // Worth showing the dialog anyway: the transfer will ask the server again,
             // and a name from the URL is better than refusing to start.
             _logger.LogWarning(exception, "Could not look up {Address} before saving.", address);
-            suggested = SafeFileName.FromUri(source);
+
+            string guessed = SafeFileName.FromUri(source);
+            probe = new DownloadProbe(
+                guessed, null, null, FileCategories.Resolve(guessed), SupportsResume: false);
         }
 
-        return await _picker.PickAsync(suggested, _downloadFolder.GetPath());
+        return await _picker.PickAsync(address, probe, _downloadFolder.GetPath());
     }
+
+    [RelayCommand]
+    private Task OpenSettingsAsync() => _dialogs.ShowSettingsAsync();
 
     [RelayCommand]
     private async Task ClearFinishedAsync()

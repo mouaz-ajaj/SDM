@@ -53,5 +53,5 @@ public sealed class CategoryDownloadLayoutTests
     }
 
     private static CategoryDownloadLayout Create(bool organize) =>
-        new(Options.Create(new DownloadOptions { OrganizeIntoCategoryFolders = organize }));
+        new(new TestOptions<DownloadOptions>(new DownloadOptions { OrganizeIntoCategoryFolders = organize }));
 }

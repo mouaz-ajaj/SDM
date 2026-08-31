@@ -7,7 +7,7 @@ namespace SDM.Desktop.Views;
 
 public sealed partial class MainWindow : Window
 {
-    private readonly StorageProviderSaveLocationPicker? _picker;
+    private readonly DialogSaveLocationPicker? _dialogs;
 
     private bool _shutdownStarted;
 
@@ -16,11 +16,11 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
     }
 
-    public MainWindow(MainWindowViewModel viewModel, StorageProviderSaveLocationPicker picker)
+    public MainWindow(MainWindowViewModel viewModel, DialogSaveLocationPicker dialogs)
         : this()
     {
         DataContext = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
-        _picker = picker ?? throw new ArgumentNullException(nameof(picker));
+        _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
     }
 
     /// <summary>Restores the previous session once the window is up, not during construction.</summary>
@@ -28,10 +28,7 @@ public sealed partial class MainWindow : Window
     {
         base.OnLoaded(e);
 
-        if (_picker is not null)
-        {
-            _picker.Attach(this);
-        }
+        _dialogs?.Attach(this);
 
         if (DataContext is MainWindowViewModel viewModel)
         {

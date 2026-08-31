@@ -248,16 +248,38 @@ stdout happened to be redirected, and a failure during startup left no trace at 
 - Dismissing the dialog starts nothing and leaves the address in the box.
 - A chosen destination lands exactly there, sorting or no sorting.
 
-### Phase 3.7 — The console shell (planned)
+### Phase 3.7 — Settings and the save dialog — DONE
+
+Brought forward ahead of the shell: both are separate windows, so neither waits on the
+main view being rebuilt, and the user asked for them first.
+
+**Scope**
+- A user settings file layered over the shipped one, outside the installation, watched
+  so a saved value applies to the next download rather than the next launch.
+- `IUserSettingsStore` writes it, preserving every section the settings screen does not
+  manage: the file belongs to the user, not to one screen.
+- Options are read through `IOptionsMonitor` wherever a value is read per call.
+  Connection limits become semaphores at startup and still need a restart, which the
+  screen says plainly instead of pretending otherwise.
+- SDM's own save dialog replaces the system picker: it shows what the server said the
+  file is — real name, size, type, whether it can be resumed — plus a folder with Browse.
+
+**Acceptance**
+- Settings survive a rebuild and an update.
+- Saving one value leaves a hand-written section in the same file untouched.
+- The save dialog shows the real name for a URL that ends in an opaque id.
+
+### Phase 3.8 — The console shell (planned)
 
 The chosen design: sidebar with filters and categories, a real table, and a detail
 panel with Details, Connections and History tabs. Needs per-segment progress surfaced
 from the engine, which currently reports one aggregate number.
 
-### Phase 3.8 — Settings screen (planned)
+### Phase 3.9 — Browser-facing settings (planned)
 
-Every control maps to a key in appsettings.json. Requires writing settings at runtime,
-which the application does not do at all today.
+The browser pane of the settings screen — bridge status, per-browser extension state,
+and the takeover toggles. Built alongside Track C, since none of it can be honest
+before the bridge exists.
 
 ---
 

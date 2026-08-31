@@ -8,6 +8,9 @@ public sealed class DownloadOptions
     /// Sort finished files into a sub-folder per category — Documents, Video, Programs
     /// and so on — instead of piling everything into one folder.
     /// </summary>
+    /// <summary>Where downloads go. Empty means the system Downloads folder.</summary>
+    public string Folder { get; init; } = string.Empty;
+
     public bool OrganizeIntoCategoryFolders { get; init; } = true;
 
     /// <summary>

@@ -24,6 +24,7 @@ internal static class Program
             logger.LogInformation(
                 "Writing diagnostics to {LogDirectory}.",
                 services.GetRequiredService<FileLoggerProvider>().Directory);
+            logger.LogInformation("User settings file: {SettingsPath}.", SdmBootstrapper.UserSettingsPath);
 
             BuildAvaloniaApp(services).StartWithClassicDesktopLifetime(args);
 

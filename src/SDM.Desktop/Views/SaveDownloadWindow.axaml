@@ -1,0 +1,86 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:SDM.Desktop.ViewModels"
+        x:Class="SDM.Desktop.Views.SaveDownloadWindow"
+        x:DataType="vm:SaveDownloadViewModel"
+        Title="Save download"
+        Icon="/Assets/Branding/sdm-mark.png"
+        Width="620"
+        Height="472"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI"
+        Background="{StaticResource WindowBackgroundBrush}">
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="26,22,26,20">
+
+    <StackPanel Grid.Row="0" Spacing="4">
+      <TextBlock Text="Save download" FontSize="17" FontWeight="SemiBold"
+                 Foreground="{StaticResource TextPrimaryBrush}" />
+      <TextBlock Classes="footnote" Text="{Binding Address}" TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+
+    <StackPanel Grid.Row="1" Margin="0,20,0,0" Spacing="16">
+
+      <!-- What the server said it is -->
+      <Border Classes="card" Padding="20,17">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="sectionLabel" Text="WHAT THE SERVER SAYS THIS IS" />
+
+          <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
+            <StackPanel Spacing="3">
+              <TextBlock Classes="footnote" Text="Size" />
+              <TextBlock Classes="metric" Text="{Binding SizeText}" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Spacing="3">
+              <TextBlock Classes="footnote" Text="Category" />
+              <TextBlock Classes="metric" Text="{Binding CategoryText}" />
+            </StackPanel>
+            <StackPanel Grid.Row="1" Margin="0,12,0,0" Spacing="3">
+              <TextBlock Classes="footnote" Text="Type" />
+              <TextBlock Classes="metric" Text="{Binding MediaTypeText}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" Spacing="3">
+              <TextBlock Classes="footnote" Text="Resumable" />
+              <TextBlock Classes="metric" Text="{Binding ResumeText}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- Where it goes -->
+      <Border Classes="card" Padding="20,17">
+        <StackPanel Spacing="13">
+          <TextBlock Classes="sectionLabel" Text="WHERE TO PUT IT" />
+
+          <StackPanel Spacing="6">
+            <TextBlock Classes="footnote" Text="File name" />
+            <TextBox Classes="address" Text="{Binding FileName}" />
+          </StackPanel>
+
+          <StackPanel Spacing="6">
+            <TextBlock Classes="footnote" Text="Folder" />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Classes="address" Text="{Binding Folder}" />
+              <Button Grid.Column="1" Classes="secondary" Margin="10,0,0,0"
+                      Content="Browse…" Command="{Binding BrowseCommand}" />
+            </Grid>
+          </StackPanel>
+
+          <TextBlock Classes="footnote"
+                     Text="Chosen folders are used as-is — category sorting is skipped." />
+        </StackPanel>
+      </Border>
+
+      <TextBlock Classes="error"
+                 Text="{Binding ErrorMessage}"
+                 IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+    </StackPanel>
+
+    <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Margin="0,18,0,0">
+      <Button Grid.Column="1" Classes="secondary" Content="Cancel" Command="{Binding CancelCommand}" />
+      <Button Grid.Column="2" Classes="primary" Margin="10,0,0,0"
+              Content="Download" Command="{Binding ConfirmCommand}" IsDefault="True" />
+    </Grid>
+  </Grid>
+</Window>

@@ -1,0 +1,132 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:SDM.Desktop.ViewModels"
+        x:Class="SDM.Desktop.Views.SettingsWindow"
+        x:DataType="vm:SettingsViewModel"
+        Title="SDM — Settings"
+        Icon="/Assets/Branding/sdm-mark.png"
+        Width="700"
+        Height="640"
+        MinWidth="620"
+        MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI"
+        Background="{StaticResource WindowBackgroundBrush}">
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="26,22,26,20">
+
+    <StackPanel Grid.Row="0" Spacing="4">
+      <TextBlock Text="Settings" FontSize="19" FontWeight="SemiBold"
+                 Foreground="{StaticResource TextPrimaryBrush}" />
+      <TextBlock Classes="footnote" Text="{Binding SettingsPath}" TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+
+    <ScrollViewer Grid.Row="1" Margin="0,20,0,0"
+                  HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+      <StackPanel Spacing="14">
+
+        <!-- Location -->
+        <Border Classes="card" Padding="20,17">
+          <StackPanel Spacing="13">
+            <TextBlock Classes="sectionLabel" Text="LOCATION" />
+
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Classes="address" Text="{Binding DownloadFolder}" />
+              <Button Grid.Column="1" Classes="secondary" Margin="10,0,0,0"
+                      Content="Browse…" Command="{Binding BrowseCommand}" />
+            </Grid>
+
+            <CheckBox IsChecked="{Binding OrganizeIntoCategoryFolders}"
+                      Content="Sort into category folders (Documents, Video, Programs…)"
+                      Foreground="{StaticResource TextSecondaryBrush}" />
+
+            <CheckBox IsChecked="{Binding AskWhereToSave}"
+                      Content="Ask where to save every download"
+                      Foreground="{StaticResource TextSecondaryBrush}" />
+          </StackPanel>
+        </Border>
+
+        <!-- Speed and limits -->
+        <Border Classes="card" Padding="20,17">
+          <StackPanel Spacing="14">
+            <TextBlock Classes="sectionLabel" Text="SPEED AND LIMITS" />
+
+            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="metric" Text="Transfers at once" />
+                <TextBlock Classes="footnote" Text="Downloads:MaximumConcurrent" />
+              </StackPanel>
+              <NumericUpDown Grid.Column="1" Classes="setting" Value="{Binding MaximumConcurrent}"
+                             Minimum="1" Maximum="16" Increment="1" FormatString="0" />
+
+              <StackPanel Grid.Row="1" Margin="0,12,0,0" Spacing="2">
+                <TextBlock Classes="metric" Text="Transfers per site" />
+                <TextBlock Classes="footnote" Text="Downloads:MaximumPerHost" />
+              </StackPanel>
+              <NumericUpDown Grid.Row="1" Grid.Column="1" Classes="setting" Margin="0,12,0,0"
+                             Value="{Binding MaximumPerHost}" Minimum="1" Maximum="16" Increment="1" FormatString="0" />
+
+              <StackPanel Grid.Row="2" Margin="0,12,0,0" Spacing="2">
+                <TextBlock Classes="metric" Text="Connections per site" />
+                <TextBlock Classes="footnote" Text="Downloads:MaximumConnectionsPerHost" />
+              </StackPanel>
+              <NumericUpDown Grid.Row="2" Grid.Column="1" Classes="setting" Margin="0,12,0,0"
+                             Value="{Binding MaximumConnectionsPerHost}" Minimum="1" Maximum="32" Increment="1" FormatString="0" />
+
+              <StackPanel Grid.Row="3" Margin="0,12,0,0" Spacing="2">
+                <TextBlock Classes="metric" Text="Parts per file" />
+                <TextBlock Classes="footnote" Text="Downloads:MaximumSegments" />
+              </StackPanel>
+              <NumericUpDown Grid.Row="3" Grid.Column="1" Classes="setting" Margin="0,12,0,0"
+                             Value="{Binding MaximumSegments}" Minimum="1" Maximum="16" Increment="1" FormatString="0" />
+            </Grid>
+
+            <Border CornerRadius="9" Padding="12,10" Background="#111F2E" BorderThickness="1"
+                    BorderBrush="{StaticResource StrokeStrongBrush}">
+              <TextBlock Classes="footnote" TextWrapping="Wrap"
+                         Text="One transfer never takes a site's whole connection budget — a connection stays free so a second download starts straight away." />
+            </Border>
+          </StackPanel>
+        </Border>
+
+        <!-- When things go wrong -->
+        <Border Classes="card" Padding="20,17">
+          <StackPanel Spacing="14">
+            <TextBlock Classes="sectionLabel" Text="WHEN THINGS GO WRONG" />
+
+            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="metric" Text="Attempts" />
+                <TextBlock Classes="footnote" Text="Downloads:MaximumAttempts" />
+              </StackPanel>
+              <NumericUpDown Grid.Column="1" Classes="setting" Value="{Binding MaximumAttempts}"
+                             Minimum="1" Maximum="10" Increment="1" FormatString="0" />
+
+              <StackPanel Grid.Row="1" Margin="0,12,0,0" Spacing="2">
+                <TextBlock Classes="metric" Text="Silence limit (seconds)" />
+                <TextBlock Classes="footnote" Text="Downloads:IdleTimeoutSeconds" />
+              </StackPanel>
+              <NumericUpDown Grid.Row="1" Grid.Column="1" Classes="setting" Margin="0,12,0,0"
+                             Value="{Binding IdleTimeoutSeconds}" Minimum="5" Maximum="3600" Increment="5" FormatString="0" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+    <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Margin="0,16,0,0">
+      <StackPanel Spacing="3" VerticalAlignment="Center">
+        <TextBlock Classes="footnote" Text="{x:Static vm:SettingsViewModel.RestartNote}" />
+        <TextBlock Classes="metric"
+                   Text="{Binding StatusMessage}"
+                   IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      </StackPanel>
+
+      <Button Grid.Column="1" Classes="secondary" Content="Restore defaults"
+              Command="{Binding RestoreDefaultsCommand}" />
+      <Button Grid.Column="2" Classes="primary" Margin="10,0,0,0" Content="Save"
+              Command="{Binding SaveCommand}" IsDefault="True" />
+    </Grid>
+  </Grid>
+</Window>

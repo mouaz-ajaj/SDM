@@ -7,12 +7,12 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
 {
     private readonly IDownloadEngine _engine;
     private readonly IDownloadFolder _downloadFolder;
-    private readonly DownloadOptions _options;
+    private readonly IOptionsMonitor<DownloadOptions> _options;
 
     public StartDownloadUseCase(
         IDownloadEngine engine,
         IDownloadFolder downloadFolder,
-        IOptions<DownloadOptions> options)
+        IOptionsMonitor<DownloadOptions> options)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(downloadFolder);
@@ -20,7 +20,7 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
 
         _engine = engine;
         _downloadFolder = downloadFolder;
-        _options = options.Value;
+        _options = options;
     }
 
     public async Task<DownloadResult> ExecuteAsync(
@@ -44,13 +44,13 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
                 return await _engine.DownloadAsync(request, callbacks, cancellationToken);
             }
             catch (DownloadFailedException failure)
-                when (failure.IsTransient && attempt < _options.MaximumAttempts)
+                when (failure.IsTransient && attempt < _options.CurrentValue.MaximumAttempts)
             {
                 // Since Phase 3.1 the engine resumes from the partial file it left behind,
                 // so a retry continues rather than discarding everything transferred so far.
                 TimeSpan delay = DelayFor(failure, attempt);
                 callbacks?.Retrying?.Invoke(
-                    new DownloadRetry(attempt, _options.MaximumAttempts, delay, failure.Message));
+                    new DownloadRetry(attempt, _options.CurrentValue.MaximumAttempts, delay, failure.Message));
 
                 await Task.Delay(delay, cancellationToken);
             }
@@ -77,7 +77,7 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
 
     private TimeSpan DelayFor(DownloadFailedException failure, int attempt)
     {
-        TimeSpan cap = TimeSpan.FromSeconds(_options.MaximumRetryDelaySeconds);
+        TimeSpan cap = TimeSpan.FromSeconds(_options.CurrentValue.MaximumRetryDelaySeconds);
 
         // The server's own instruction wins over guesswork, but it does not get to park
         // the download for an hour.

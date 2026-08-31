@@ -41,14 +41,13 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     private readonly IConnectionBudget _connectionBudget;
     private readonly IDownloadLayout _layout;
     private readonly ILogger<HttpDownloadEngine> _logger;
-    private readonly DownloadOptions _options;
-    private readonly TimeSpan _idleTimeout;
+    private readonly IOptionsMonitor<DownloadOptions> _options;
 
     public HttpDownloadEngine(
         IHttpClientFactory httpClientFactory,
         IConnectionBudget connectionBudget,
         IDownloadLayout layout,
-        IOptions<DownloadOptions> options,
+        IOptionsMonitor<DownloadOptions> options,
         ILogger<HttpDownloadEngine> logger)
     {
         ArgumentNullException.ThrowIfNull(httpClientFactory);
@@ -61,9 +60,11 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         _connectionBudget = connectionBudget;
         _layout = layout;
         _logger = logger;
-        _options = options.Value;
-        _idleTimeout = TimeSpan.FromSeconds(_options.IdleTimeoutSeconds);
+        _options = options;
     }
+
+    /// <summary>Read per transfer so a changed value applies to the next download.</summary>
+    private TimeSpan IdleTimeout => TimeSpan.FromSeconds(_options.CurrentValue.IdleTimeoutSeconds);
 
     public async Task<DownloadResult> DownloadAsync(
         DownloadRequest request,
@@ -78,12 +79,12 @@ public sealed class HttpDownloadEngine : IDownloadEngine
 
         // One idle clock covers the whole transfer and is pushed forward whenever any
         // connection delivers, so a server that goes silent fails instead of hanging.
-        using CancellationTokenSource idle = new(_idleTimeout);
+        using CancellationTokenSource idle = new(IdleTimeout);
         using CancellationTokenSource linked =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, idle.Token);
 
         using IConnectionLease lease = await _connectionBudget.AcquireAsync(
-            request.Source.Host, _options.MaximumSegments, cancellationToken);
+            request.Source.Host, _options.CurrentValue.MaximumSegments, cancellationToken);
 
         return existing?.Metadata.Segments is { Length: > 0 }
             ? await ResumeSegmentedAsync(request, existing, callbacks, idle, linked.Token, cancellationToken)
@@ -94,7 +95,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        using CancellationTokenSource idle = new(_idleTimeout);
+        using CancellationTokenSource idle = new(IdleTimeout);
         using CancellationTokenSource linked =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, idle.Token);
 
@@ -268,7 +269,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
                 firstResponse,
                 (segment, token) => SendAsync(
                     request.Source, segment.Position, segment.End, metadata.Validator, token, callerToken),
-                () => idle.CancelAfter(_idleTimeout),
+                () => idle.CancelAfter(IdleTimeout),
                 linkedToken);
         }
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
@@ -314,7 +315,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             int read;
             while ((read = await source.ReadAsync(buffer, linkedToken)) > 0)
             {
-                idle.CancelAfter(_idleTimeout);
+                idle.CancelAfter(IdleTimeout);
 
                 await target.WriteAsync(buffer.AsMemory(0, read), linkedToken);
                 bytesWritten += read;
@@ -373,12 +374,12 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             return 1;
         }
 
-        if (total < _options.SegmentThresholdBytes)
+        if (total < _options.CurrentValue.SegmentThresholdBytes)
         {
             return 1;
         }
 
-        return Math.Clamp(Math.Min(availableConnections, _options.MaximumSegments), 1, 16);
+        return Math.Clamp(Math.Min(availableConnections, _options.CurrentValue.MaximumSegments), 1, 16);
     }
 
     private async Task<HttpResponseMessage> SendAsync(
@@ -411,7 +412,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
         {
             throw new DownloadFailedException(
-                $"The server did not respond within {_idleTimeout.TotalSeconds:0} seconds.",
+                $"The server did not respond within {IdleTimeout.TotalSeconds:0} seconds.",
                 null, null, isTransient: true);
         }
         catch (HttpRequestException exception)
@@ -442,7 +443,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     }
 
     private DownloadFailedException IdleFailure() => new(
-        $"The server stopped sending data for {_idleTimeout.TotalSeconds:0} seconds.",
+        $"The server stopped sending data for {IdleTimeout.TotalSeconds:0} seconds.",
         null, null, isTransient: true);
 
     private static void EnsureSuccess(HttpResponseMessage response)

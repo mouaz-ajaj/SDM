@@ -9,19 +9,21 @@ namespace SDM.Application.Downloads;
 /// </summary>
 public sealed class CategoryDownloadLayout : IDownloadLayout
 {
-    private readonly DownloadOptions _options;
+    private readonly IOptionsMonitor<DownloadOptions> _options;
 
-    public CategoryDownloadLayout(IOptions<DownloadOptions> options)
+    public CategoryDownloadLayout(IOptionsMonitor<DownloadOptions> options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        _options = options.Value;
+        _options = options;
     }
 
     public string ResolveDirectory(string baseDirectory, string fileName, string? mediaType)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
 
-        if (!_options.OrganizeIntoCategoryFolders)
+        // Read per call so turning sorting off takes effect on the next download rather
+        // than the next launch.
+        if (!_options.CurrentValue.OrganizeIntoCategoryFolders)
         {
             return baseDirectory;
         }

@@ -137,7 +137,7 @@ public sealed class StartDownloadUseCaseTests
         IDownloadEngine engine,
         int maximumAttempts = 4,
         int maximumRetryDelaySeconds = 60) =>
-        new(engine, new FixedFolder(), Options.Create(new DownloadOptions
+        new(engine, new FixedFolder(), new TestOptions<DownloadOptions>(new DownloadOptions
         {
             MaximumAttempts = maximumAttempts,
             MaximumRetryDelaySeconds = maximumRetryDelaySeconds,

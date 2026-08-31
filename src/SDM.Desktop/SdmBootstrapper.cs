@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SDM.Application;
@@ -10,6 +11,8 @@ namespace SDM.Desktop;
 
 public static class SdmBootstrapper
 {
+    private const string UserSettingsFileName = SdmPaths.UserSettingsFileName;
+
     public static ServiceProvider CreateServiceProvider(string? basePath = null)
     {
         IConfiguration configuration = BuildConfiguration(basePath);
@@ -43,6 +46,9 @@ public static class SdmBootstrapper
         });
     }
 
+    /// <summary>The user's own settings file, which survives reinstalling and rebuilding.</summary>
+    public static string UserSettingsPath => SdmPaths.UserSettingsPath;
+
     private static IConfiguration BuildConfiguration(string? basePath)
     {
         string contentRoot = basePath ?? AppContext.BaseDirectory;
@@ -50,6 +56,20 @@ public static class SdmBootstrapper
         return new ConfigurationBuilder()
             .SetBasePath(contentRoot)
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+
+            // Layered on top, and deliberately outside the installation: the shipped file
+            // is replaced by every build and every update, so a preference written there
+            // would quietly disappear. Only the keys the user changed need be present.
+            .AddJsonFile(
+                new PhysicalFileProvider(EnsureUserSettingsDirectory()),
+                UserSettingsFileName,
+                optional: true,
+
+                // Watched, so a setting saved from inside the application takes effect on
+                // the next download rather than the next launch.
+                reloadOnChange: true)
             .Build();
     }
+
+    private static string EnsureUserSettingsDirectory() => SdmPaths.EnsureUserDataDirectory();
 }
