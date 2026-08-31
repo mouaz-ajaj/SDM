@@ -44,6 +44,7 @@ public static class DependencyInjection
         services.AddSingleton<IStartDownloadUseCase, StartDownloadUseCase>();
         services.AddSingleton<IDownloadScheduler, DownloadScheduler>();
         services.AddSingleton<IConnectionBudget, HostConnectionBudget>();
+        services.AddSingleton<IDownloadLayout, CategoryDownloadLayout>();
         return services;
     }
 }

@@ -125,11 +125,18 @@ internal static class PartialFile
         TryDelete(partialPath + MetadataSuffix);
     }
 
+    /// <summary>
+    /// The download folder and one level below it. Sorting into category sub-folders
+    /// means a partial file is rarely at the top level any more, and a resume that
+    /// cannot find its own partial file silently starts the whole download again.
+    /// </summary>
     private static IEnumerable<string> EnumerateMetadata(string directory)
     {
+        string pattern = "*" + PartialSuffix + MetadataSuffix;
+
         try
         {
-            return Directory.EnumerateFiles(directory, "*" + PartialSuffix + MetadataSuffix);
+            return Directory.EnumerateFiles(directory, pattern, SearchOption.AllDirectories);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

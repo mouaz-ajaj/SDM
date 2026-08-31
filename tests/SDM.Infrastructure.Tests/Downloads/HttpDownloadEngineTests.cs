@@ -243,6 +243,68 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAsync_SortsTheFinishedFileIntoItsCategoryFolder()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(organizeIntoCategoryFolders: true);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("opaque-id"), _workingDirectory),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // Content-Disposition names it a .pdf, so it belongs under Documents.
+        Assert.Equal(
+            Path.Combine(_workingDirectory, "Documents", "quarterly report.pdf"),
+            result.DestinationPath);
+        Assert.Equal(FileCategory.Documents, result.Category);
+        Assert.True(File.Exists(result.DestinationPath));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_ReportsTheServersTypeInThePlan()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadPlan? plan = null;
+        await engine.DownloadAsync(
+            new DownloadRequest(server.Url("typed-video"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("video/mp4", plan!.MediaType);
+        Assert.Equal(FileCategory.Video, plan.Category);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_ResumesAPartialThatLivesInACategoryFolder()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(organizeIntoCategoryFolders: true);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        await CancelPartWayThroughAsync(engine, server.Url("resumable.zip"));
+
+        string partial = Path.Combine(_workingDirectory, "Compressed", "resumable.zip.part");
+        Assert.True(File.Exists(partial), "The partial file should be inside the category folder.");
+
+        // Looking only at the top level would miss it and silently start over.
+        DownloadPlan? plan = null;
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("resumable.zip"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
+
+        Assert.True(plan!.ResumedFrom > 0, "The transfer should have continued, not restarted.");
+        Assert.Equal(Path.Combine(_workingDirectory, "Compressed", "resumable.zip"), result.DestinationPath);
+        Assert.Equal(Hash(_payload), Hash(written));
+    }
+
+    [Fact]
     public async Task DiscardPartial_RemovesThePartialFileAndItsMetadata()
     {
         using LocalHttpServer server = new(ServeAsync);
@@ -419,7 +481,8 @@ public sealed class HttpDownloadEngineTests : IDisposable
     private static ServiceProvider BuildProvider(
         int idleTimeoutSeconds = 60,
         int maximumSegments = 1,
-        long segmentThresholdBytes = long.MaxValue)
+        long segmentThresholdBytes = long.MaxValue,
+        bool organizeIntoCategoryFolders = false)
     {
         DownloadOptions options = new()
         {
@@ -427,12 +490,14 @@ public sealed class HttpDownloadEngineTests : IDisposable
             MaximumSegments = maximumSegments,
             MaximumConnectionsPerHost = maximumSegments + 1,
             SegmentThresholdBytes = segmentThresholdBytes,
+            OrganizeIntoCategoryFolders = organizeIntoCategoryFolders,
         };
 
         ServiceCollection services = new();
         services.AddLogging();
         services.AddSingleton<IOptions<DownloadOptions>>(Options.Create(options));
         services.AddSingleton<IConnectionBudget>(new HostConnectionBudget(Options.Create(options)));
+        services.AddSingleton<IDownloadLayout>(new CategoryDownloadLayout(Options.Create(options)));
         services.AddSdmInfrastructure();
         return services.BuildServiceProvider();
     }
@@ -457,7 +522,14 @@ public sealed class HttpDownloadEngineTests : IDisposable
                 break;
 
             case "/resumable.bin":
+            case "/resumable.zip":
                 await ServeRangeAsync(context, cancellationToken);
+                break;
+
+            case "/typed-video":
+                context.Response.ContentType = "video/mp4";
+                context.Response.ContentLength64 = _small.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
                 break;
 
             case "/ignores-range.bin":

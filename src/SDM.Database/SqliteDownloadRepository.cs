@@ -33,6 +33,9 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         );
         CREATE INDEX ix_downloads_created_at ON downloads (created_at DESC);
         """,
+        """
+        ALTER TABLE downloads ADD COLUMN media_type TEXT NULL;
+        """,
     ];
 
     private readonly SemaphoreSlim _initialization = new(1, 1);
@@ -70,7 +73,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, address, destination_path, bytes_received, total_bytes,
-                   status, detail, created_at, updated_at
+                   status, detail, created_at, updated_at, media_type
             FROM downloads
             ORDER BY created_at DESC;
             """;
@@ -91,6 +94,10 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
                 Detail = reader.IsDBNull(6) ? null : reader.GetString(6),
                 CreatedAt = DateTimeOffset.Parse(reader.GetString(7), null),
                 UpdatedAt = DateTimeOffset.Parse(reader.GetString(8), null),
+                MediaType = reader.IsDBNull(9) ? null : reader.GetString(9),
+                Category = FileCategories.Resolve(
+                    reader.IsDBNull(2) ? null : Path.GetFileName(reader.GetString(2)),
+                    reader.IsDBNull(9) ? null : reader.GetString(9)),
             });
         }
 
@@ -107,10 +114,10 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         command.CommandText = """
             INSERT INTO downloads
                 (id, address, destination_path, bytes_received, total_bytes,
-                 status, detail, created_at, updated_at)
+                 status, detail, created_at, updated_at, media_type)
             VALUES
                 ($id, $address, $destination, $received, $total,
-                 $status, $detail, $created, $updated)
+                 $status, $detail, $created, $updated, $media)
             ON CONFLICT(id) DO UPDATE SET
                 address          = excluded.address,
                 destination_path = excluded.destination_path,
@@ -118,6 +125,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
                 total_bytes      = excluded.total_bytes,
                 status           = excluded.status,
                 detail           = excluded.detail,
+                media_type       = excluded.media_type,
                 updated_at       = excluded.updated_at;
             """;
 
@@ -130,6 +138,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         command.Parameters.AddWithValue("$detail", (object?)job.Detail ?? DBNull.Value);
         command.Parameters.AddWithValue("$created", job.CreatedAt.ToString("O"));
         command.Parameters.AddWithValue("$updated", job.UpdatedAt.ToString("O"));
+        command.Parameters.AddWithValue("$media", (object?)job.MediaType ?? DBNull.Value);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

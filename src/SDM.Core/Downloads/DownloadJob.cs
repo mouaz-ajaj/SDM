@@ -22,6 +22,11 @@ public sealed record DownloadJob
 
     public string? Detail { get; init; }
 
+    /// <summary>The server's Content-Type. Null for jobs saved before it was recorded.</summary>
+    public string? MediaType { get; init; }
+
+    public FileCategory Category { get; init; } = FileCategory.Other;
+
     public required DateTimeOffset CreatedAt { get; init; }
 
     public DateTimeOffset UpdatedAt { get; init; }

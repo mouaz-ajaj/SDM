@@ -32,6 +32,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private CancellationTokenSource _cancellation = new();
     private long _bytesReceived;
     private long? _totalBytes;
+    private string? _mediaType;
+    private FileCategory _category = FileCategory.Other;
     private long _lastBytes;
     private long _lastTimestamp;
     private double _bytesPerSecond;
@@ -78,6 +80,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     /// <summary>Shown when the transfer is split, so the speed figure is explicable.</summary>
     [ObservableProperty]
     private string _connectionsText = string.Empty;
+
+    /// <summary>Documents, Video, Programs — what the file was sorted as.</summary>
+    [ObservableProperty]
+    private string _categoryName = string.Empty;
 
     private DownloadItemViewModel(
         IDownloadScheduler scheduler,
@@ -129,6 +135,9 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             DestinationPath = job.DestinationPath,
             _bytesReceived = job.BytesReceived,
             _totalBytes = job.TotalBytes,
+            _mediaType = job.MediaType,
+            _category = job.Category,
+            CategoryName = FileCategories.FolderNameFor(job.Category),
             IsIndeterminate = false,
         };
 
@@ -195,6 +204,9 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             FileName = Path.GetFileName(result.DestinationPath);
             _bytesReceived = result.BytesWritten;
             _totalBytes = result.BytesWritten;
+            _mediaType = result.MediaType ?? _mediaType;
+            _category = result.Category;
+            CategoryName = FileCategories.FolderNameFor(result.Category);
             Percentage = 100;
             IsIndeterminate = false;
             SpeedText = string.Empty;
@@ -337,6 +349,9 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         DestinationPath = plan.DestinationPath;
         FileName = Path.GetFileName(plan.DestinationPath);
         ServerSupportsResume = plan.ServerSupportsResume;
+        _mediaType = plan.MediaType;
+        _category = plan.Category;
+        CategoryName = FileCategories.FolderNameFor(plan.Category);
         _totalBytes = plan.TotalBytes;
         _bytesReceived = plan.ResumedFrom;
         PauseCommand.NotifyCanExecuteChanged();
@@ -437,6 +452,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             TotalBytes = _totalBytes,
             Status = Status,
             Detail = Detail,
+            MediaType = _mediaType,
+            Category = _category,
             CreatedAt = _createdAt,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

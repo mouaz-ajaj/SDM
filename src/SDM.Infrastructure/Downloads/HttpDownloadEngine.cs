@@ -39,6 +39,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConnectionBudget _connectionBudget;
+    private readonly IDownloadLayout _layout;
     private readonly ILogger<HttpDownloadEngine> _logger;
     private readonly DownloadOptions _options;
     private readonly TimeSpan _idleTimeout;
@@ -46,16 +47,19 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     public HttpDownloadEngine(
         IHttpClientFactory httpClientFactory,
         IConnectionBudget connectionBudget,
+        IDownloadLayout layout,
         IOptions<DownloadOptions> options,
         ILogger<HttpDownloadEngine> logger)
     {
         ArgumentNullException.ThrowIfNull(httpClientFactory);
         ArgumentNullException.ThrowIfNull(connectionBudget);
+        ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _httpClientFactory = httpClientFactory;
         _connectionBudget = connectionBudget;
+        _layout = layout;
         _logger = logger;
         _options = options.Value;
         _idleTimeout = TimeSpan.FromSeconds(_options.IdleTimeoutSeconds);
@@ -121,10 +125,13 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         bool resuming = ranged && streamResumeFrom > 0;
         long resumeFrom = resuming ? streamResumeFrom : 0;
 
+        string? mediaType = response.Content.Headers.ContentType?.MediaType;
+
         string destination = resuming && existing is not null
             ? existing.DestinationPath
-            : ResolveDestinationPath(request, response);
+            : ResolveDestinationPath(request, response, mediaType);
 
+        FileCategory category = FileCategories.Resolve(Path.GetFileName(destination), mediaType);
         string partialPath = destination + PartialFile.PartialSuffix;
         long? totalBytes = ResolveTotalLength(response, resumeFrom);
 
@@ -134,14 +141,19 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             request.Source.AbsoluteUri, totalBytes, ValidatorFor(response), null);
 
         _logger.LogInformation(
-            "Downloading {Source} to {Destination}; total {TotalBytes}, resuming from {ResumeFrom}, {Segments} connection(s).",
+            "Downloading {Source} to {Destination}; {MediaType}, total {TotalBytes}, resuming from {ResumeFrom}, {Segments} connection(s).",
             request.Source,
             destination,
+            mediaType ?? "type unknown",
             totalBytes,
             resumeFrom,
             segmentCount);
 
-        callbacks?.Planned?.Invoke(new DownloadPlan(destination, totalBytes, resumeFrom, ranged, segmentCount));
+        callbacks?.Planned?.Invoke(new DownloadPlan(destination, totalBytes, resumeFrom, ranged, segmentCount)
+        {
+            MediaType = mediaType,
+            Category = category,
+        });
 
         long bytesWritten = segmentCount > 1
             ? await RunSegmentedAsync(
@@ -150,7 +162,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             : await RunSingleStreamAsync(
                 response, partialPath, metadata, resumeFrom, totalBytes, callbacks, idle, linkedToken, callerToken);
 
-        return Complete(destination, partialPath, bytesWritten, totalBytes, callbacks);
+        return Complete(destination, partialPath, bytesWritten, totalBytes, mediaType, category, callbacks);
     }
 
     /// <summary>Picks up a split transfer, opening a fresh connection for each unfinished part.</summary>
@@ -174,13 +186,25 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             totalBytes);
 
         callbacks?.Planned?.Invoke(
-            new DownloadPlan(existing.DestinationPath, totalBytes, alreadyDone, true, segments.Length));
+            new DownloadPlan(existing.DestinationPath, totalBytes, alreadyDone, true, segments.Length)
+            {
+                Category = FileCategories.Resolve(Path.GetFileName(existing.DestinationPath)),
+            });
 
         long bytesWritten = await RunSegmentedAsync(
             request, existing.PartialPath, existing.Metadata, segments,
             null, totalBytes, callbacks, idle, linkedToken, callerToken);
 
-        return Complete(existing.DestinationPath, existing.PartialPath, bytesWritten, totalBytes, callbacks);
+        // A resumed transfer never re-reads the headers, so the category comes from the
+        // name the first attempt already settled on.
+        return Complete(
+            existing.DestinationPath,
+            existing.PartialPath,
+            bytesWritten,
+            totalBytes,
+            mediaType: null,
+            FileCategories.Resolve(Path.GetFileName(existing.DestinationPath)),
+            callbacks);
     }
 
     private async Task<long> RunSegmentedAsync(
@@ -293,6 +317,8 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         string partialPath,
         long bytesWritten,
         long? totalBytes,
+        string? mediaType,
+        FileCategory category,
         DownloadCallbacks? callbacks)
     {
         File.Move(partialPath, destination, overwrite: false);
@@ -301,7 +327,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         callbacks?.Progress?.Report(new DownloadProgress(bytesWritten, totalBytes ?? bytesWritten));
         _logger.LogInformation("Completed {Destination}; {BytesWritten} bytes on disk.", destination, bytesWritten);
 
-        return new DownloadResult(destination, bytesWritten);
+        return new DownloadResult(destination, bytesWritten) { MediaType = mediaType, Category = category };
     }
 
     /// <summary>
@@ -425,13 +451,20 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     /// then the URL — and guarantees the result stays inside the destination directory
     /// and does not overwrite an existing file.
     /// </summary>
-    private static string ResolveDestinationPath(DownloadRequest request, HttpResponseMessage response)
+    private string ResolveDestinationPath(
+        DownloadRequest request, HttpResponseMessage response, string? mediaType)
     {
         string? suggested = response.Content.Headers.ContentDisposition?.FileNameStar
             ?? response.Content.Headers.ContentDisposition?.FileName;
 
         string fileName = request.PreferredFileName ?? SafeFileName.Resolve(suggested, request.Source);
-        string candidate = Path.GetFullPath(Path.Combine(request.DestinationDirectory, fileName));
+
+        // Only now, with both the settled name and the server's type in hand, can the
+        // category folder be chosen.
+        string directory = _layout.ResolveDirectory(request.DestinationDirectory, fileName, mediaType);
+        Directory.CreateDirectory(directory);
+
+        string candidate = Path.GetFullPath(Path.Combine(directory, fileName));
 
         // SafeFileName already strips separators, so this can only fail if that contract
         // is ever broken. Checking anyway keeps a future regression from writing outside

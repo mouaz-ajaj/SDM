@@ -4,6 +4,12 @@ public sealed class DownloadOptions
 {
     public const string SectionName = "Downloads";
 
+    /// <summary>
+    /// Sort finished files into a sub-folder per category — Documents, Video, Programs
+    /// and so on — instead of piling everything into one folder.
+    /// </summary>
+    public bool OrganizeIntoCategoryFolders { get; init; } = true;
+
     /// <summary>How many transfers may run at once across the whole application.</summary>
     public int MaximumConcurrent { get; init; } = 3;
 

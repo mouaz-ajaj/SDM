@@ -211,6 +211,44 @@ stdout happened to be redirected, and a failure during startup left no trace at 
 
 ---
 
+### Phase 3.5 — File types and category folders — DONE
+
+**Scope**
+- `FileCategories` classifies by extension first, then the server's Content-Type — the
+  extension is what the user sees and what Windows opens the file with, and plenty of
+  download URLs end in an opaque id with no extension at all.
+- `IDownloadLayout` in the application layer decides the folder; the engine asks once
+  the name and type are settled. Sorting is a policy, not something transfer code knows.
+- The engine records the Content-Type; the database gains a column for it by appending
+  a second migration.
+- Unrecognised files stay at the top rather than filling an "Other" folder nobody opens.
+
+**Acceptance**
+- A .pdf lands in `DownloadsDocuments`, an .iso in `Compressed`, an .exe in `Programs`.
+- A URL with no extension is sorted by its Content-Type.
+- A partial file inside a category folder is still found and resumed — looking only at
+  the top level would silently restart the download.
+
+---
+
+### Phase 3.6 — Ask where to save (planned)
+
+Probe the URL for its real name and size, show a save dialog with that name filled in,
+then download to wherever the user chose. Optional, off by default.
+
+### Phase 3.7 — The console shell (planned)
+
+The chosen design: sidebar with filters and categories, a real table, and a detail
+panel with Details, Connections and History tabs. Needs per-segment progress surfaced
+from the engine, which currently reports one aggregate number.
+
+### Phase 3.8 — Settings screen (planned)
+
+Every control maps to a key in appsettings.json. Requires writing settings at runtime,
+which the application does not do at all today.
+
+---
+
 ## Track C — Browser integration (4–6 sessions)
 
 The hardest track. It is here — rather than earlier — because it hands URLs to a
