@@ -26,6 +26,12 @@ public static class DependencyInjection
                 "Downloads:MaximumPerHost must be between 1 and 16.")
             .Validate(options => options.MaximumPerHost <= options.MaximumConcurrent,
                 "Downloads:MaximumPerHost cannot exceed Downloads:MaximumConcurrent.")
+            .Validate(options => options.MaximumConnectionsPerHost is > 0 and <= 32,
+                "Downloads:MaximumConnectionsPerHost must be between 1 and 32.")
+            .Validate(options => options.MaximumSegments is > 0 and <= 16,
+                "Downloads:MaximumSegments must be between 1 and 16.")
+            .Validate(options => options.SegmentThresholdBytes >= 0,
+                "Downloads:SegmentThresholdBytes cannot be negative.")
             .Validate(options => options.MaximumAttempts is > 0 and <= 10,
                 "Downloads:MaximumAttempts must be between 1 and 10.")
             .Validate(options => options.IdleTimeoutSeconds is >= 5 and <= 3600,
@@ -37,6 +43,7 @@ public static class DependencyInjection
         services.AddSingleton<IApplicationInfoService, ApplicationInfoService>();
         services.AddSingleton<IStartDownloadUseCase, StartDownloadUseCase>();
         services.AddSingleton<IDownloadScheduler, DownloadScheduler>();
+        services.AddSingleton<IConnectionBudget, HostConnectionBudget>();
         return services;
     }
 }

@@ -2,13 +2,32 @@ using System.Text.Json;
 
 namespace SDM.Infrastructure.Downloads;
 
+/// <summary>How far one segment of a split transfer has got. <paramref name="End"/> is inclusive.</summary>
+internal sealed record SegmentState(long Start, long End, long Completed)
+{
+    public long Length => End - Start + 1;
+
+    public long Position => Start + Completed;
+
+    public bool IsComplete => Completed >= Length;
+}
+
 /// <summary>
 /// What a <c>.part</c> file belongs to. Resuming purely on a matching file name would be
 /// dangerous: two different URLs can easily resolve to <c>setup.exe</c>, and appending
 /// one server's bytes to another's produces a corrupt file that still looks complete.
 /// This sidecar makes the owning URL explicit, and survives the process being killed.
 /// </summary>
-internal sealed record PartialFileMetadata(string Url, long? TotalBytes, string? Validator);
+/// <param name="Segments">
+/// Null for a single-stream transfer, where the file's own length is how far it got.
+/// A split transfer writes into the middle of the file, so its progress cannot be read
+/// back from the file size and has to be recorded per segment.
+/// </param>
+internal sealed record PartialFileMetadata(
+    string Url,
+    long? TotalBytes,
+    string? Validator,
+    SegmentState[]? Segments);
 
 /// <summary>A partial file on disk that a new request is allowed to continue.</summary>
 internal sealed record ResumablePartial(
@@ -54,16 +73,28 @@ internal static class PartialFile
 
             long length = new FileInfo(partialPath).Length;
 
-            if (length <= 0)
+            if (metadata.Segments is { Length: > 0 } segments)
             {
-                continue;
+                // A split file is pre-allocated at full size, so its length says nothing
+                // about progress. It is resumable while any segment is unfinished.
+                if (segments.All(segment => segment.IsComplete))
+                {
+                    continue;
+                }
             }
-
-            // A partial at or past the advertised size is not resumable; something is
-            // stale, so let the caller start again rather than produce a truncated file.
-            if (metadata.TotalBytes is { } total && length >= total)
+            else
             {
-                continue;
+                if (length <= 0)
+                {
+                    continue;
+                }
+
+                // A partial at or past the advertised size is not resumable; something is
+                // stale, so let the caller start again rather than produce a short file.
+                if (metadata.TotalBytes is { } total && length >= total)
+                {
+                    continue;
+                }
             }
 
             return new ResumablePartial(
@@ -73,14 +104,13 @@ internal static class PartialFile
         return null;
     }
 
-    public static void Write(string partialPath, Uri source, long? totalBytes, string? validator)
+    public static void Write(string partialPath, PartialFileMetadata metadata)
     {
         try
         {
             File.WriteAllText(
                 partialPath + MetadataSuffix,
-                JsonSerializer.Serialize(
-                    new PartialFileMetadata(source.AbsoluteUri, totalBytes, validator), SerializerOptions));
+                JsonSerializer.Serialize(metadata, SerializerOptions));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

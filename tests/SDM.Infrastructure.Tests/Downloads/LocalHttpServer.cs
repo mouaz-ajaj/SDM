@@ -48,25 +48,33 @@ internal sealed class LocalHttpServer : IDisposable
                 return;
             }
 
+            // Each request is served on its own task. Awaiting here would serialise the
+            // server, and a segmented download — several range requests in flight at
+            // once — would deadlock waiting for a connection that is never accepted.
+            _ = ServeAsync(context);
+        }
+    }
+
+    private async Task ServeAsync(HttpListenerContext context)
+    {
+        try
+        {
+            await _handler(context, _shutdown.Token);
+        }
+        catch (Exception)
+        {
+            // The client hanging up mid-response is exactly what the cancellation and
+            // segmenting tests provoke, so a broken pipe here is expected.
+        }
+        finally
+        {
             try
             {
-                await _handler(context, _shutdown.Token);
+                context.Response.Close();
             }
             catch (Exception)
             {
-                // The client hanging up mid-response is exactly what the cancellation
-                // test provokes, so a broken pipe here is expected rather than a failure.
-            }
-            finally
-            {
-                try
-                {
-                    context.Response.Close();
-                }
-                catch (Exception)
-                {
-                    // Already torn down by the client.
-                }
+                // Already torn down by the client.
             }
         }
     }

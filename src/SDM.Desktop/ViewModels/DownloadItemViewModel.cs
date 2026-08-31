@@ -75,6 +75,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private bool _serverSupportsResume = true;
 
+    /// <summary>Shown when the transfer is split, so the speed figure is explicable.</summary>
+    [ObservableProperty]
+    private string _connectionsText = string.Empty;
+
     private DownloadItemViewModel(
         IDownloadScheduler scheduler,
         IDownloadRepository repository,

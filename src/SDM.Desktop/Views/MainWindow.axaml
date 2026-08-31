@@ -139,7 +139,7 @@
                                IsIndeterminate="{Binding IsIndeterminate}"
                                IsVisible="{Binding ShowsProgress}" />
 
-                  <Grid ColumnDefinitions="*,Auto,Auto">
+                  <Grid ColumnDefinitions="*,Auto,Auto,Auto">
                     <TextBlock Classes="metric" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
 
                     <TextBlock Grid.Column="1"
@@ -149,6 +149,12 @@
                                Foreground="{StaticResource BrandSkyBrush}" />
 
                     <TextBlock Grid.Column="2"
+                               Classes="metric"
+                               Margin="16,0,0,0"
+                               Text="{Binding ConnectionsText}"
+                               Foreground="{StaticResource TextMutedBrush}" />
+
+                    <TextBlock Grid.Column="3"
                                Classes="metric"
                                Margin="16,0,0,0"
                                Text="{Binding RemainingText}" />

@@ -170,7 +170,7 @@ sidecar naming the owning URL, its total length and Hetzner's own ETag.
 - The database file lives under `%LOCALAPPDATA%\SDM\`, not next to the executable.
 - `ArchitectureReferenceTests` still rejects SQLite packages in Core and Application.
 
-### Phase 3.3 — Multi-part segmented download
+### Phase 3.3 — Multi-part segmented download — DONE
 
 This is where the *Speed* in the name is earned.
 
@@ -179,6 +179,10 @@ This is where the *Speed* in the name is earned.
   one preallocated file at the right offsets.
 - Aggregate per-segment progress into one figure.
 - Segment count configurable, default 4.
+- A per-host connection budget, distinct from the per-host transfer limit: segments
+  draw from it, and no single transfer may take the whole of it — one connection is
+  held back for every other transfer the host is allowed to run, or a second download
+  of the same site would wait for the first to finish rather than share with it.
 
 **Acceptance**
 - Measurably faster than single-stream on a server that supports `Range`.

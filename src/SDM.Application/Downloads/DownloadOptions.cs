@@ -4,23 +4,36 @@ public sealed class DownloadOptions
 {
     public const string SectionName = "Downloads";
 
-    /// <summary>
-    /// How many transfers may run at once across the whole application.
-    /// </summary>
+    /// <summary>How many transfers may run at once across the whole application.</summary>
     public int MaximumConcurrent { get; init; } = 3;
 
     /// <summary>
-    /// How many may run against a single host. Servers enforce their own per-client
-    /// limits — exceeding them earns a 429 rather than more speed.
+    /// How many transfers may run against a single host. Distinct from the connection
+    /// budget below: one transfer can hold several connections when it is segmented.
     /// </summary>
     public int MaximumPerHost { get; init; } = 2;
+
+    /// <summary>
+    /// The total TCP connections allowed to one host, shared by every transfer aimed at
+    /// it. This is the limit servers actually enforce, and exceeding it earns a 429
+    /// rather than more speed.
+    /// </summary>
+    public int MaximumConnectionsPerHost { get; init; } = 6;
+
+    /// <summary>Segments a single transfer may split into, subject to the connection budget.</summary>
+    public int MaximumSegments { get; init; } = 4;
+
+    /// <summary>
+    /// Below this size, segmenting costs more in extra handshakes than it returns.
+    /// </summary>
+    public long SegmentThresholdBytes { get; init; } = 8 * 1024 * 1024;
 
     /// <summary>Total attempts, including the first. 1 disables retrying.</summary>
     public int MaximumAttempts { get; init; } = 4;
 
     /// <summary>
-    /// Fail a transfer whose connection goes silent for this long. The HTTP client's own
-    /// timeout is disabled because it spans the whole body and would kill large files.
+    /// Fail a transfer whose connections all go silent for this long. The HTTP client's
+    /// own timeout is disabled because it spans the whole body and would kill large files.
     /// </summary>
     public int IdleTimeoutSeconds { get; init; } = 60;
 

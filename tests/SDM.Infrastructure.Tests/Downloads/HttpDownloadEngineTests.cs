@@ -153,6 +153,96 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAsync_SplitsALargeRangeCapableFileAcrossSeveralConnections()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(maximumSegments: 4, segmentThresholdBytes: 1024);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadPlan? plan = null;
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("resumable.bin"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
+
+        Assert.Equal(4, plan!.SegmentCount);
+        Assert.Equal(PayloadSize, result.BytesWritten);
+
+        // The whole point: four connections writing into one file must reassemble it
+        // byte for byte, in the right order, with no gap or overlap.
+        Assert.Equal(Hash(_payload), Hash(written));
+        Assert.Single(Directory.GetFiles(_workingDirectory));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_DoesNotSplitAFileBelowTheThreshold()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(
+            maximumSegments: 4, segmentThresholdBytes: PayloadSize * 2L);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadPlan? plan = null;
+        await engine.DownloadAsync(
+            new DownloadRequest(server.Url("resumable.bin"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, plan!.SegmentCount);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_DoesNotSplitAServerThatRefusesRanges()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(maximumSegments: 4, segmentThresholdBytes: 1024);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadPlan? plan = null;
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("ignores-range.bin"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, plan!.SegmentCount);
+        Assert.False(plan.ServerSupportsResume);
+        Assert.Equal(Hash(_payload), Hash(written));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_ResumesASplitTransferFromItsRecordedSegmentPositions()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(maximumSegments: 4, segmentThresholdBytes: 1024);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        await CancelPartWayThroughAsync(engine, server.Url("resumable.bin"));
+
+        // A split file is pre-allocated at full size, so its own length says nothing about
+        // progress: the sidecar's per-segment positions are the only record.
+        string sidecar = await File.ReadAllTextAsync(
+            Path.Combine(_workingDirectory, "resumable.bin.part.meta"), TestContext.Current.CancellationToken);
+        Assert.Contains("\"segments\"", sidecar, StringComparison.Ordinal);
+
+        DownloadPlan? plan = null;
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("resumable.bin"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
+
+        Assert.Equal(4, plan!.SegmentCount);
+        Assert.True(plan.ResumedFrom > 0, "The resumed transfer should have kept its earlier bytes.");
+        Assert.Equal(Hash(_payload), Hash(written));
+        Assert.Single(Directory.GetFiles(_workingDirectory));
+    }
+
+    [Fact]
     public async Task DiscardPartial_RemovesThePartialFileAndItsMetadata()
     {
         using LocalHttpServer server = new(ServeAsync);
@@ -326,12 +416,23 @@ public sealed class HttpDownloadEngineTests : IDisposable
     private static DownloadCallbacks Watching(List<DownloadProgress> reports) =>
         new() { Progress = new SynchronousProgress<DownloadProgress>(reports.Add) };
 
-    private static ServiceProvider BuildProvider(int idleTimeoutSeconds = 60)
+    private static ServiceProvider BuildProvider(
+        int idleTimeoutSeconds = 60,
+        int maximumSegments = 1,
+        long segmentThresholdBytes = long.MaxValue)
     {
+        DownloadOptions options = new()
+        {
+            IdleTimeoutSeconds = idleTimeoutSeconds,
+            MaximumSegments = maximumSegments,
+            MaximumConnectionsPerHost = maximumSegments + 1,
+            SegmentThresholdBytes = segmentThresholdBytes,
+        };
+
         ServiceCollection services = new();
         services.AddLogging();
-        services.AddSingleton<IOptions<DownloadOptions>>(
-            Options.Create(new DownloadOptions { IdleTimeoutSeconds = idleTimeoutSeconds }));
+        services.AddSingleton<IOptions<DownloadOptions>>(Options.Create(options));
+        services.AddSingleton<IConnectionBudget>(new HostConnectionBudget(Options.Create(options)));
         services.AddSdmInfrastructure();
         return services.BuildServiceProvider();
     }
@@ -409,39 +510,48 @@ public sealed class HttpDownloadEngineTests : IDisposable
         context.Response.AddHeader("Accept-Ranges", "bytes");
         context.Response.AddHeader("ETag", "\"payload-v1\"");
 
-        long start = ParseRangeStart(context.Request.Headers["Range"]);
+        (bool ranged, long start, long end) = ParseRange(context.Request.Headers["Range"], _payload.Length);
 
-        if (start > 0)
+        if (ranged)
         {
+            // RFC 7233: a server that honours a range answers 206 with Content-Range —
+            // including for an open-ended "bytes=0-", which is how a client discovers
+            // that the resource can be split at all.
             context.Response.StatusCode = (int)HttpStatusCode.PartialContent;
-            context.Response.AddHeader(
-                "Content-Range", $"bytes {start}-{_payload.Length - 1}/{_payload.Length}");
+            context.Response.AddHeader("Content-Range", $"bytes {start}-{end}/{_payload.Length}");
         }
 
-        context.Response.ContentLength64 = _payload.Length - start;
-        await WriteInChunksAsync(context, start, cancellationToken);
+        context.Response.ContentLength64 = end - start + 1;
+        await WriteInChunksAsync(context, start, end, cancellationToken);
     }
 
-    private static long ParseRangeStart(string? header)
+    private static (bool Ranged, long Start, long End) ParseRange(string? header, long length)
     {
         const string Prefix = "bytes=";
 
         if (header is null || !header.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
         {
-            return 0;
+            return (false, 0, length - 1);
         }
 
-        string value = header[Prefix.Length..].Split('-')[0];
-        return long.TryParse(value, out long start) ? start : 0;
+        string[] parts = header[Prefix.Length..].Split('-');
+        long start = long.TryParse(parts[0], out long parsedStart) ? parsedStart : 0;
+        long end = parts.Length > 1 && long.TryParse(parts[1], out long parsedEnd) ? parsedEnd : length - 1;
+
+        return (true, start, Math.Min(end, length - 1));
     }
 
-    private async Task WriteInChunksAsync(HttpListenerContext context, long from, CancellationToken cancellationToken)
+    private Task WriteInChunksAsync(HttpListenerContext context, long from, CancellationToken cancellationToken) =>
+        WriteInChunksAsync(context, from, _payload.Length - 1, cancellationToken);
+
+    private async Task WriteInChunksAsync(
+        HttpListenerContext context, long from, long to, CancellationToken cancellationToken)
     {
         const int ChunkSize = 64 * 1024;
 
-        for (long offset = from; offset < _payload.Length; offset += ChunkSize)
+        for (long offset = from; offset <= to; offset += ChunkSize)
         {
-            int length = (int)Math.Min(ChunkSize, _payload.Length - offset);
+            int length = (int)Math.Min(ChunkSize, to - offset + 1);
 
             await context.Response.OutputStream.WriteAsync(
                 _payload.AsMemory((int)offset, length), cancellationToken);

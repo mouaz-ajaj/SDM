@@ -8,4 +8,5 @@ public sealed record DownloadPlan(
     string DestinationPath,
     long? TotalBytes,
     long ResumedFrom,
-    bool ServerSupportsResume);
+    bool ServerSupportsResume,
+    int SegmentCount);
