@@ -26,19 +26,16 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
     public async Task<DownloadResult> ExecuteAsync(
         string address,
         DownloadCallbacks? callbacks = null,
+        DownloadDestination? destination = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(address);
-
-        if (!Uri.TryCreate(address.Trim(), UriKind.Absolute, out Uri? source))
-        {
-            throw new ArgumentException(
-                "Enter a complete address, including http:// or https://.", nameof(address));
-        }
+        Uri source = Parse(address);
 
         // DownloadRequest rejects anything that is not HTTP or HTTPS, with a message the
         // user interface can show as-is.
-        DownloadRequest request = new(source, _downloadFolder.GetPath());
+        DownloadRequest request = destination is null
+            ? new DownloadRequest(source, _downloadFolder.GetPath())
+            : new DownloadRequest(source, destination.Directory, destination.FileName, chosenByUser: true);
 
         for (int attempt = 1; ; attempt++)
         {
@@ -60,7 +57,23 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
         }
     }
 
+    public Task<DownloadProbe> ProbeAsync(string address, CancellationToken cancellationToken = default) =>
+        _engine.ProbeAsync(Parse(address), cancellationToken);
+
     public void Discard(string destinationPath) => _engine.DiscardPartial(destinationPath);
+
+    private static Uri Parse(string address)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(address);
+
+        if (!Uri.TryCreate(address.Trim(), UriKind.Absolute, out Uri? source))
+        {
+            throw new ArgumentException(
+                "Enter a complete address, including http:// or https://.", nameof(address));
+        }
+
+        return source;
+    }
 
     private TimeSpan DelayFor(DownloadFailedException failure, int attempt)
     {

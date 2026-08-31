@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using SDM.Desktop.Services;
 using SDM.Desktop.ViewModels;
 using SDM.Desktop.Views;
 
@@ -10,6 +11,9 @@ public static class DependencyInjection
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddSingleton<StorageProviderSaveLocationPicker>();
+        services.AddSingleton<ISaveLocationPicker>(
+            provider => provider.GetRequiredService<StorageProviderSaveLocationPicker>());
         services.AddTransient<MainWindowViewModel>();
         services.AddTransient<MainWindow>();
         return services;

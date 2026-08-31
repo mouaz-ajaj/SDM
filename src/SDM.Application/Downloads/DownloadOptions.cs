@@ -10,6 +10,13 @@ public sealed class DownloadOptions
     /// </summary>
     public bool OrganizeIntoCategoryFolders { get; init; } = true;
 
+    /// <summary>
+    /// Ask where to save every download instead of deciding automatically. Off by
+    /// default: a dialog per file is the right choice for some people and an
+    /// interruption for everyone else.
+    /// </summary>
+    public bool AskWhereToSave { get; init; }
+
     /// <summary>How many transfers may run at once across the whole application.</summary>
     public int MaximumConcurrent { get; init; } = 3;
 

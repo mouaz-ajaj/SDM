@@ -305,6 +305,90 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task ProbeAsync_LearnsTheRealNameSizeAndTypeWithoutDownloading()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        // The URL says "opaque-id"; only the server knows it is a PDF called something else.
+        DownloadProbe probe = await engine.ProbeAsync(
+            server.Url("opaque-id"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("quarterly report.pdf", probe.FileName);
+        Assert.Equal(FileCategory.Documents, probe.Category);
+        Assert.Empty(Directory.GetFiles(_workingDirectory));
+    }
+
+    [Fact]
+    public async Task ProbeAsync_ReportsTheSizeAndWhetherTheServerAcceptsRanges()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadProbe resumable = await engine.ProbeAsync(
+            server.Url("resumable.bin"), TestContext.Current.CancellationToken);
+        DownloadProbe plain = await engine.ProbeAsync(
+            server.Url("ignores-range.bin"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(PayloadSize, resumable.TotalBytes);
+        Assert.True(resumable.SupportsResume);
+        Assert.False(plain.SupportsResume);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_SurfacesAFailureRatherThanGuessing()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadFailedException exception = await Assert.ThrowsAsync<DownloadFailedException>(
+            () => engine.ProbeAsync(server.Url("missing.bin"), TestContext.Current.CancellationToken));
+
+        Assert.Equal(404, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_WritesExactlyWhereTheUserChose()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(organizeIntoCategoryFolders: true);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        string chosen = Path.Combine(_workingDirectory, "picked");
+        Directory.CreateDirectory(chosen);
+
+        // Sorting is on, so without the explicit choice this would land in Documents.
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("opaque-id"), chosen, "my report.pdf", chosenByUser: true),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.Combine(chosen, "my report.pdf"), result.DestinationPath);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_ReplacesAFileTheUserChoseToReplace()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        string existing = Path.Combine(_workingDirectory, "report.pdf");
+        await File.WriteAllTextAsync(existing, "old", TestContext.Current.CancellationToken);
+
+        // The save dialog already asked about replacing, so answering it with
+        // "report (1).pdf" would ignore what the user just said.
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("opaque-id"), _workingDirectory, "report.pdf", chosenByUser: true),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(existing, result.DestinationPath);
+        Assert.Equal(_small.Length, new FileInfo(existing).Length);
+    }
+
+    [Fact]
     public async Task DiscardPartial_RemovesThePartialFileAndItsMetadata()
     {
         using LocalHttpServer server = new(ServeAsync);

@@ -3,9 +3,11 @@ using System.Collections.Specialized;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using SDM.Application.ApplicationInfo;
 using SDM.Application.Downloads;
 using SDM.Core.Downloads;
+using SDM.Desktop.Services;
 
 namespace SDM.Desktop.ViewModels;
 
@@ -14,6 +16,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IApplicationInfoService _applicationInfo;
     private readonly IDownloadScheduler _scheduler;
     private readonly IDownloadRepository _repository;
+    private readonly IDownloadFolder _downloadFolder;
+    private readonly ISaveLocationPicker _picker;
+    private readonly DownloadOptions _options;
     private readonly ILogger<MainWindowViewModel> _logger;
 
     [ObservableProperty]
@@ -27,16 +32,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IApplicationInfoService applicationInfo,
         IDownloadScheduler scheduler,
         IDownloadRepository repository,
+        IDownloadFolder downloadFolder,
+        ISaveLocationPicker picker,
+        IOptions<DownloadOptions> options,
         ILogger<MainWindowViewModel> logger)
     {
         ArgumentNullException.ThrowIfNull(applicationInfo);
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(downloadFolder);
+        ArgumentNullException.ThrowIfNull(picker);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _applicationInfo = applicationInfo;
         _scheduler = scheduler;
         _repository = repository;
+        _downloadFolder = downloadFolder;
+        _picker = picker;
+        _options = options.Value;
         _logger = logger;
 
         Downloads.CollectionChanged += OnDownloadsChanged;
@@ -81,7 +95,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool CanAdd => !string.IsNullOrWhiteSpace(Address);
 
     [RelayCommand(CanExecute = nameof(CanAdd))]
-    private void Add()
+    private async Task AddAsync()
     {
         string address = Address.Trim();
 
@@ -93,14 +107,54 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         ErrorMessage = null;
+        DownloadDestination? destination = null;
+
+        if (_options.AskWhereToSave)
+        {
+            destination = await ChooseDestinationAsync(address, source);
+
+            // A dismissed dialog means the user changed their mind. The address stays in
+            // the box so they can adjust it rather than paste it again.
+            if (destination is null)
+            {
+                return;
+            }
+        }
+
         Address = string.Empty;
 
-        DownloadItemViewModel item = DownloadItemViewModel.Create(_scheduler, _repository, _logger, address);
+        DownloadItemViewModel item = DownloadItemViewModel.Create(
+            _scheduler, _repository, _logger, address, destination);
+
         Downloads.Insert(0, item);
 
         // RunAsync never throws — it turns every failure into the row's own status — so
         // there is no unobserved task to await here.
         _ = item.RunAsync();
+    }
+
+    /// <summary>
+    /// Asks the server for the real file name before opening the dialog. Guessing it from
+    /// the URL would offer "download" for every link that ends in an opaque id.
+    /// </summary>
+    private async Task<DownloadDestination?> ChooseDestinationAsync(string address, Uri source)
+    {
+        string suggested;
+
+        try
+        {
+            DownloadProbe probe = await _scheduler.ProbeAsync(address);
+            suggested = probe.FileName;
+        }
+        catch (Exception exception) when (exception is DownloadFailedException or ArgumentException)
+        {
+            // Worth showing the dialog anyway: the transfer will ask the server again,
+            // and a name from the URL is better than refusing to start.
+            _logger.LogWarning(exception, "Could not look up {Address} before saving.", address);
+            suggested = SafeFileName.FromUri(source);
+        }
+
+        return await _picker.PickAsync(suggested, _downloadFolder.GetPath());
     }
 
     [RelayCommand]

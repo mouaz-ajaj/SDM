@@ -27,6 +27,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private readonly ILogger _logger;
     private readonly Guid _id;
     private readonly string _address;
+    private readonly DownloadDestination? _destination;
     private readonly DateTimeOffset _createdAt;
 
     private CancellationTokenSource _cancellation = new();
@@ -91,8 +92,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         ILogger logger,
         Guid id,
         string address,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        DownloadDestination? destination = null)
     {
+        _destination = destination;
         _scheduler = scheduler;
         _repository = repository;
         _logger = logger;
@@ -106,7 +109,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         IDownloadScheduler scheduler,
         IDownloadRepository repository,
         ILogger logger,
-        string address)
+        string address,
+        DownloadDestination? destination = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(repository);
@@ -114,7 +118,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
 
         DownloadItemViewModel item = new(
-            scheduler, repository, logger, Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow);
+            scheduler, repository, logger, Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow, destination);
 
         item.Persist();
         return item;
@@ -198,7 +202,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
         try
         {
-            DownloadResult result = await _scheduler.EnqueueAsync(_address, callbacks, _cancellation.Token);
+            DownloadResult result = await _scheduler.EnqueueAsync(
+                _address, callbacks, _destination, _cancellation.Token);
 
             DestinationPath = result.DestinationPath;
             FileName = Path.GetFileName(result.DestinationPath);

@@ -1,11 +1,14 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using SDM.Desktop.Services;
 using SDM.Desktop.ViewModels;
 
 namespace SDM.Desktop.Views;
 
 public sealed partial class MainWindow : Window
 {
+    private readonly StorageProviderSaveLocationPicker? _picker;
+
     private bool _shutdownStarted;
 
     public MainWindow()
@@ -13,16 +16,22 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
     }
 
-    public MainWindow(MainWindowViewModel viewModel)
+    public MainWindow(MainWindowViewModel viewModel, StorageProviderSaveLocationPicker picker)
         : this()
     {
         DataContext = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        _picker = picker ?? throw new ArgumentNullException(nameof(picker));
     }
 
     /// <summary>Restores the previous session once the window is up, not during construction.</summary>
     protected override async void OnLoaded(RoutedEventArgs e)
     {
         base.OnLoaded(e);
+
+        if (_picker is not null)
+        {
+            _picker.Attach(this);
+        }
 
         if (DataContext is MainWindowViewModel viewModel)
         {

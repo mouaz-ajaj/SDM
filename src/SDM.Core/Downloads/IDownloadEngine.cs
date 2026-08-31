@@ -13,6 +13,11 @@ public interface IDownloadEngine
         DownloadCallbacks? callbacks = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Asks the server what a URL is — name, size, type — without downloading the body.
+    /// </summary>
+    Task<DownloadProbe> ProbeAsync(Uri source, CancellationToken cancellationToken = default);
+
     /// <summary>Deletes the partial file and its metadata for a destination that will not be resumed.</summary>
     void DiscardPartial(string destinationPath);
 }

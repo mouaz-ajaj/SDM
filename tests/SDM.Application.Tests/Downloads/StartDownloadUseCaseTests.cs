@@ -19,7 +19,7 @@ public sealed class StartDownloadUseCaseTests
         DownloadResult result = await useCase.ExecuteAsync(
             "https://example.test/file.bin",
             new DownloadCallbacks { Retrying = retries.Add },
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(3, engine.Attempts);
         Assert.Equal(2, retries.Count);
@@ -74,7 +74,7 @@ public sealed class StartDownloadUseCaseTests
         await useCase.ExecuteAsync(
             "https://example.test/file.bin",
             new DownloadCallbacks { Retrying = retries.Add },
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(TimeSpan.FromSeconds(2), retries[0].Delay);
     }
@@ -91,7 +91,7 @@ public sealed class StartDownloadUseCaseTests
         await useCase.ExecuteAsync(
             "https://example.test/file.bin",
             new DownloadCallbacks { Retrying = retries.Add },
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(TimeSpan.FromSeconds(1), retries[0].Delay);
     }
@@ -182,5 +182,9 @@ public sealed class StartDownloadUseCaseTests
         }
 
         public void DiscardPartial(string destinationPath) => Discarded = destinationPath;
+
+        public Task<DownloadProbe> ProbeAsync(Uri source, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new DownloadProbe(
+                "file.bin", 1024, "application/octet-stream", FileCategory.Other, true));
     }
 }

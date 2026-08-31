@@ -142,9 +142,13 @@ public sealed class DownloadSchedulerTests
         {
         }
 
+        public Task<DownloadProbe> ProbeAsync(string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new DownloadProbe("file.bin", 1024, null, FileCategory.Other, true));
+
         public async Task<DownloadResult> ExecuteAsync(
             string address,
             DownloadCallbacks? callbacks = null,
+            DownloadDestination? destination = null,
             CancellationToken cancellationToken = default)
         {
             lock (_sync)

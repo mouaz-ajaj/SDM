@@ -90,6 +90,37 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             : await StartAsync(request, existing, lease, callbacks, idle, linked.Token, cancellationToken);
     }
 
+    public async Task<DownloadProbe> ProbeAsync(Uri source, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        using CancellationTokenSource idle = new(_idleTimeout);
+        using CancellationTokenSource linked =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, idle.Token);
+
+        // A one-byte range is the cheapest question that still gets a full answer: the
+        // name from Content-Disposition, the size from Content-Range, and proof of
+        // range support from the status code itself.
+        using HttpResponseMessage response = await SendAsync(
+            source, 0, 0, validator: null, linked.Token, cancellationToken);
+
+        EnsureSuccess(response);
+
+        bool ranged = response.StatusCode == HttpStatusCode.PartialContent;
+        string? mediaType = response.Content.Headers.ContentType?.MediaType;
+
+        string? suggested = response.Content.Headers.ContentDisposition?.FileNameStar
+            ?? response.Content.Headers.ContentDisposition?.FileName;
+
+        string fileName = SafeFileName.Resolve(suggested, source);
+
+        long? totalBytes = response.Content.Headers.ContentRange?.Length
+            ?? (ranged ? null : response.Content.Headers.ContentLength);
+
+        return new DownloadProbe(
+            fileName, totalBytes, mediaType, FileCategories.Resolve(fileName, mediaType), ranged);
+    }
+
     public void DiscardPartial(string destinationPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
@@ -321,7 +352,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         FileCategory category,
         DownloadCallbacks? callbacks)
     {
-        File.Move(partialPath, destination, overwrite: false);
+        File.Move(partialPath, destination, overwrite: true);
         PartialFile.Delete(partialPath);
 
         callbacks?.Progress?.Report(new DownloadProgress(bytesWritten, totalBytes ?? bytesWritten));
@@ -460,8 +491,12 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         string fileName = request.PreferredFileName ?? SafeFileName.Resolve(suggested, request.Source);
 
         // Only now, with both the settled name and the server's type in hand, can the
-        // category folder be chosen.
-        string directory = _layout.ResolveDirectory(request.DestinationDirectory, fileName, mediaType);
+        // category folder be chosen — unless the user picked a folder in a save dialog,
+        // in which case sorting would move the file away from where they put it.
+        string directory = request.ChosenByUser
+            ? request.DestinationDirectory
+            : _layout.ResolveDirectory(request.DestinationDirectory, fileName, mediaType);
+
         Directory.CreateDirectory(directory);
 
         string candidate = Path.GetFullPath(Path.Combine(directory, fileName));
@@ -475,7 +510,9 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             candidate = Path.Combine(request.DestinationDirectory, SafeFileName.Fallback);
         }
 
-        return EnsureUnique(candidate);
+        // The system save dialog has already asked about replacing an existing file, so
+        // second-guessing it with "name (1)" would ignore what the user just said.
+        return request.ChosenByUser ? candidate : EnsureUnique(candidate);
     }
 
     private static string EnsureUnique(string path)

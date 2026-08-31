@@ -231,10 +231,22 @@ stdout happened to be redirected, and a failure during startup left no trace at 
 
 ---
 
-### Phase 3.6 — Ask where to save (planned)
+### Phase 3.6 — Ask where to save — DONE
 
-Probe the URL for its real name and size, show a save dialog with that name filled in,
-then download to wherever the user chose. Optional, off by default.
+**Scope**
+- `IDownloadEngine.ProbeAsync` asks the server what a URL is — name, size, type, range
+  support — with a one-byte range request, without downloading the body.
+- A save dialog pre-filled with the real name, reached through Avalonia's storage
+  provider behind an interface so the view model does not depend on a window.
+- An explicitly chosen folder and name skip category sorting and skip the "name (1)"
+  rule: the system dialog has already asked about replacing, and second-guessing it
+  would ignore what the user just said.
+- `Downloads:AskWhereToSave`, off by default.
+
+**Acceptance**
+- A URL ending in an opaque id offers its real name in the dialog, not "download".
+- Dismissing the dialog starts nothing and leaves the address in the box.
+- A chosen destination lands exactly there, sorting or no sorting.
 
 ### Phase 3.7 — The console shell (planned)
 

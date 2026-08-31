@@ -7,7 +7,11 @@ namespace SDM.Core.Downloads;
 /// </summary>
 public sealed record DownloadRequest
 {
-    public DownloadRequest(Uri source, string destinationDirectory, string? preferredFileName = null)
+    public DownloadRequest(
+        Uri source,
+        string destinationDirectory,
+        string? preferredFileName = null,
+        bool chosenByUser = false)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -21,6 +25,7 @@ public sealed record DownloadRequest
         Source = source;
         DestinationDirectory = Path.GetFullPath(destinationDirectory);
         PreferredFileName = preferredFileName is null ? null : SafeFileName.Sanitize(preferredFileName);
+        ChosenByUser = chosenByUser;
     }
 
     public Uri Source { get; }
@@ -29,4 +34,11 @@ public sealed record DownloadRequest
 
     /// <summary>An explicit name chosen by the caller, already sanitized. Overrides the server's.</summary>
     public string? PreferredFileName { get; }
+
+    /// <summary>
+    /// True when the folder and name came from a save dialog. The system dialog has
+    /// already asked about replacing an existing file, so the engine must write exactly
+    /// where it was told rather than inventing "name (1)".
+    /// </summary>
+    public bool ChosenByUser { get; }
 }
