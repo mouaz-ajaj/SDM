@@ -7,7 +7,7 @@ namespace SDM.Application.Tests.Downloads;
 public sealed class StartDownloadUseCaseTests
 {
     [Fact]
-    public async Task ExecuteAsync_RetriesATransientFailureThatDeliveredNoBytes()
+    public async Task ExecuteAsync_RetriesATransientFailure()
     {
         ScriptedEngine engine = new(
             new DownloadFailedException("Server answered 429", 429, null, isTransient: true),
@@ -17,8 +17,9 @@ public sealed class StartDownloadUseCaseTests
         StartDownloadUseCase useCase = Create(engine);
 
         DownloadResult result = await useCase.ExecuteAsync(
-            "https://example.test/file.bin", onRetry: retries.Add,
-            cancellationToken: TestContext.Current.CancellationToken);
+            "https://example.test/file.bin",
+            new DownloadCallbacks { Retrying = retries.Add },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(3, engine.Attempts);
         Assert.Equal(2, retries.Count);
@@ -28,9 +29,11 @@ public sealed class StartDownloadUseCaseTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DoesNotRetryOnceBytesHaveArrived()
+    public async Task ExecuteAsync_KeepsRetryingAfterBytesHaveArrivedBecauseTheEngineResumes()
     {
-        // Retrying here would throw away everything already transferred and start over.
+        // Phase 2.4 refused to retry once anything had transferred, because a restart
+        // would have discarded it. The engine now continues from its partial file, so
+        // this is exactly the case retrying is most valuable for.
         ScriptedEngine engine = new(new DownloadFailedException(
             "The connection failed after 900000000 bytes.", null, null, isTransient: true))
         {
@@ -39,10 +42,10 @@ public sealed class StartDownloadUseCaseTests
 
         StartDownloadUseCase useCase = Create(engine);
 
-        await Assert.ThrowsAsync<DownloadFailedException>(() => useCase.ExecuteAsync(
-            "https://example.test/file.bin", cancellationToken: TestContext.Current.CancellationToken));
+        await useCase.ExecuteAsync(
+            "https://example.test/file.bin", cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(1, engine.Attempts);
+        Assert.Equal(2, engine.Attempts);
     }
 
     [Fact]
@@ -69,8 +72,9 @@ public sealed class StartDownloadUseCaseTests
         StartDownloadUseCase useCase = Create(engine);
 
         await useCase.ExecuteAsync(
-            "https://example.test/file.bin", onRetry: retries.Add,
-            cancellationToken: TestContext.Current.CancellationToken);
+            "https://example.test/file.bin",
+            new DownloadCallbacks { Retrying = retries.Add },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(TimeSpan.FromSeconds(2), retries[0].Delay);
     }
@@ -85,8 +89,9 @@ public sealed class StartDownloadUseCaseTests
         StartDownloadUseCase useCase = Create(engine, maximumRetryDelaySeconds: 1);
 
         await useCase.ExecuteAsync(
-            "https://example.test/file.bin", onRetry: retries.Add,
-            cancellationToken: TestContext.Current.CancellationToken);
+            "https://example.test/file.bin",
+            new DownloadCallbacks { Retrying = retries.Add },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(TimeSpan.FromSeconds(1), retries[0].Delay);
     }
@@ -104,6 +109,17 @@ public sealed class StartDownloadUseCaseTests
             "https://example.test/file.bin", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(3, engine.Attempts);
+    }
+
+    [Fact]
+    public void Discard_RemovesThePartialFileForAnAbandonedTransfer()
+    {
+        ScriptedEngine engine = new();
+        StartDownloadUseCase useCase = Create(engine);
+
+        useCase.Discard(@"C:\Downloads\file.bin");
+
+        Assert.Equal(@"C:\Downloads\file.bin", engine.Discarded);
     }
 
     [Theory]
@@ -139,18 +155,21 @@ public sealed class StartDownloadUseCaseTests
 
         public int Attempts { get; private set; }
 
+        public string? Discarded { get; private set; }
+
         public long BytesBeforeFailure { get; init; }
 
         public Task<DownloadResult> DownloadAsync(
             DownloadRequest request,
-            IProgress<DownloadProgress>? progress = null,
+            DownloadCallbacks? callbacks = null,
             CancellationToken cancellationToken = default)
         {
             Attempts++;
 
             if (BytesBeforeFailure > 0)
             {
-                progress?.Report(new DownloadProgress(BytesBeforeFailure, BytesBeforeFailure * 2));
+                callbacks?.Progress?.Report(
+                    new DownloadProgress(BytesBeforeFailure, BytesBeforeFailure * 2));
             }
 
             if (_index < failures.Length)
@@ -161,5 +180,7 @@ public sealed class StartDownloadUseCaseTests
             return Task.FromResult(new DownloadResult(
                 Path.Combine(request.DestinationDirectory, "file.bin"), 1024));
         }
+
+        public void DiscardPartial(string destinationPath) => Discarded = destinationPath;
     }
 }

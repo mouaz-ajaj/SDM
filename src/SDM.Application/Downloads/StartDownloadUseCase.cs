@@ -25,8 +25,7 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
 
     public async Task<DownloadResult> ExecuteAsync(
         string address,
-        IProgress<DownloadProgress>? progress = null,
-        Action<DownloadRetry>? onRetry = null,
+        DownloadCallbacks? callbacks = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
@@ -43,30 +42,25 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
 
         for (int attempt = 1; ; attempt++)
         {
-            FirstByteWatcher watcher = new(progress);
-
             try
             {
-                return await _engine.DownloadAsync(request, watcher, cancellationToken);
+                return await _engine.DownloadAsync(request, callbacks, cancellationToken);
             }
             catch (DownloadFailedException failure)
-                when (ShouldRetry(failure, attempt, watcher.ReceivedBytes))
+                when (failure.IsTransient && attempt < _options.MaximumAttempts)
             {
+                // Since Phase 3.1 the engine resumes from the partial file it left behind,
+                // so a retry continues rather than discarding everything transferred so far.
                 TimeSpan delay = DelayFor(failure, attempt);
-                onRetry?.Invoke(new DownloadRetry(attempt, _options.MaximumAttempts, delay, failure.Message));
+                callbacks?.Retrying?.Invoke(
+                    new DownloadRetry(attempt, _options.MaximumAttempts, delay, failure.Message));
 
                 await Task.Delay(delay, cancellationToken);
             }
         }
     }
 
-    /// <summary>
-    /// Retrying is only worthwhile while nothing has been transferred. Until the engine
-    /// can resume (Phase 3.1), a retry after 900 MB would throw those 900 MB away and
-    /// start again — turning one failure into repeated waste of the user's bandwidth.
-    /// </summary>
-    private bool ShouldRetry(DownloadFailedException failure, int attempt, bool receivedBytes) =>
-        failure.IsTransient && attempt < _options.MaximumAttempts && !receivedBytes;
+    public void Discard(string destinationPath) => _engine.DiscardPartial(destinationPath);
 
     private TimeSpan DelayFor(DownloadFailedException failure, int attempt)
     {
@@ -85,21 +79,5 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
         TimeSpan backoff = TimeSpan.FromSeconds(seconds);
 
         return backoff < cap ? backoff : cap;
-    }
-
-    /// <summary>Passes progress through while recording whether anything actually arrived.</summary>
-    private sealed class FirstByteWatcher(IProgress<DownloadProgress>? inner) : IProgress<DownloadProgress>
-    {
-        public bool ReceivedBytes { get; private set; }
-
-        public void Report(DownloadProgress value)
-        {
-            if (value.BytesReceived > 0)
-            {
-                ReceivedBytes = true;
-            }
-
-            inner?.Report(value);
-        }
     }
 }

@@ -10,8 +10,9 @@ public interface IDownloadScheduler
     /// </summary>
     Task<DownloadResult> EnqueueAsync(
         string address,
-        IProgress<DownloadProgress>? progress = null,
-        Action? onStarted = null,
-        Action<DownloadRetry>? onRetry = null,
+        DownloadCallbacks? callbacks = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Throws away the partial file for a transfer the user has abandoned.</summary>
+    void Discard(string destinationPath);
 }

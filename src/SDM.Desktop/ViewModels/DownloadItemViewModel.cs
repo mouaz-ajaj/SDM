@@ -8,8 +8,8 @@ using SDM.Core.Downloads;
 namespace SDM.Desktop.ViewModels;
 
 /// <summary>
-/// One row in the transfer list. Owns its own cancellation source, so cancelling a row
-/// never touches its neighbours.
+/// One row in the transfer list. Owns its own cancellation source, so pausing or
+/// cancelling a row never touches its neighbours.
 /// </summary>
 public sealed partial class DownloadItemViewModel : ObservableObject, IDisposable
 {
@@ -21,12 +21,13 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private const double MinimumSampleSeconds = 0.15;
 
     private readonly IDownloadScheduler _scheduler;
-    private readonly CancellationTokenSource _cancellation = new();
     private readonly string _address;
 
+    private CancellationTokenSource _cancellation = new();
     private long _lastBytes;
     private long _lastTimestamp;
     private double _bytesPerSecond;
+    private bool _pauseRequested;
     private bool _disposed;
 
     [ObservableProperty]
@@ -42,8 +43,12 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsActive))]
     [NotifyPropertyChangedFor(nameof(IsCompleted))]
-    [NotifyPropertyChangedFor(nameof(IsFailed))]
+    [NotifyPropertyChangedFor(nameof(IsPaused))]
+    [NotifyPropertyChangedFor(nameof(IsResumable))]
+    [NotifyPropertyChangedFor(nameof(ShowsProgress))]
     [NotifyCanExecuteChangedFor(nameof(CancelCommand))]
+    [NotifyCanExecuteChangedFor(nameof(PauseCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ResumeCommand))]
     private DownloadStatus _status = DownloadStatus.Pending;
 
     [ObservableProperty]
@@ -54,6 +59,13 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     [ObservableProperty]
     private string _remainingText = string.Empty;
+
+    /// <summary>Where the engine decided to write. Known once the response headers arrive.</summary>
+    [ObservableProperty]
+    private string? _destinationPath;
+
+    [ObservableProperty]
+    private bool _serverSupportsResume = true;
 
     public DownloadItemViewModel(IDownloadScheduler scheduler, string address)
     {
@@ -71,20 +83,33 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     public bool IsCompleted => Status is DownloadStatus.Completed;
 
-    public bool IsFailed => Status is DownloadStatus.Failed;
+    public bool IsPaused => Status is DownloadStatus.Paused;
+
+    /// <summary>Paused and failed rows can both be picked up again from their partial file.</summary>
+    public bool IsResumable => Status is DownloadStatus.Paused or DownloadStatus.Failed;
+
+    public bool ShowsProgress => IsActive || IsPaused;
 
     public string PercentageText => Percentage.ToString("0", CultureInfo.CurrentCulture) + "%";
 
     /// <summary>Runs the transfer to completion. Never throws: failures become status.</summary>
     public async Task RunAsync()
     {
-        Progress<DownloadProgress> progress = new(OnProgress);
+        _pauseRequested = false;
+
+        DownloadCallbacks callbacks = new()
+        {
+            Progress = new Progress<DownloadProgress>(OnProgress),
+            Planned = OnPlanned,
+            Retrying = OnRetry,
+            Started = OnStarted,
+        };
 
         try
         {
-            DownloadResult result = await _scheduler.EnqueueAsync(
-                _address, progress, OnStarted, OnRetry, _cancellation.Token);
+            DownloadResult result = await _scheduler.EnqueueAsync(_address, callbacks, _cancellation.Token);
 
+            DestinationPath = result.DestinationPath;
             FileName = Path.GetFileName(result.DestinationPath);
             Percentage = 100;
             IsIndeterminate = false;
@@ -95,68 +120,140 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         }
         catch (OperationCanceledException)
         {
-            Fail(DownloadStatus.Cancelled, "Cancelled");
+            // Pause and cancel both cancel the token; only the row knows which was meant.
+            if (_pauseRequested)
+            {
+                Settle(DownloadStatus.Paused, "Paused");
+            }
+            else
+            {
+                Settle(DownloadStatus.Cancelled, "Cancelled");
+                DiscardPartial();
+            }
         }
         catch (ArgumentException exception)
         {
-            Fail(DownloadStatus.Failed, exception.Message);
+            Settle(DownloadStatus.Failed, exception.Message);
         }
         catch (DownloadFailedException exception)
         {
-            Fail(DownloadStatus.Failed, exception.Message);
-        }
-        catch (HttpRequestException exception)
-        {
-            Fail(DownloadStatus.Failed, exception.StatusCode is { } status
-                ? $"Server answered {(int)status} {status}"
-                : "Could not reach the server");
+            Settle(DownloadStatus.Failed, exception.Message);
         }
         catch (IOException exception)
         {
             // Reading the socket and writing the file both surface as IOException, so the
             // message must not claim to know which one failed.
-            Fail(DownloadStatus.Failed, $"Transfer failed: {exception.Message}");
+            Settle(DownloadStatus.Failed, $"Transfer failed: {exception.Message}");
         }
         catch (UnauthorizedAccessException)
         {
-            Fail(DownloadStatus.Failed, "Access to the download folder was denied");
+            Settle(DownloadStatus.Failed, "Access to the download folder was denied");
         }
     }
 
-    /// <summary>Cancels and waits for the engine to finish cleaning up its partial file.</summary>
-    public async Task CancelAndWaitAsync()
+    /// <summary>Cancels and waits for the transfer to unwind. Used while the window closes.</summary>
+    public async Task StopAndWaitAsync(bool keepPartialFile)
     {
         if (!IsActive)
         {
             return;
         }
 
-        CancelCommand.Execute(null);
+        _pauseRequested = keepPartialFile;
+        _cancellation.Cancel();
 
-        // Give the engine a moment to unwind and delete its .part file. Without this the
-        // process can exit first and leave the partial file orphaned on disk.
-        for (int attempt = 0; attempt < 50 && IsActive; attempt++)
+        for (int attempt = 0; attempt < 100 && IsActive; attempt++)
         {
             await Task.Delay(20);
         }
     }
 
-    private bool CanCancel => IsActive;
+    /// <summary>Removes the partial file for a row the user is throwing away.</summary>
+    public void DiscardPartial()
+    {
+        if (DestinationPath is { } path)
+        {
+            _scheduler.Discard(path);
+        }
+    }
+
+    private bool CanCancel => IsActive || IsResumable;
 
     [RelayCommand(CanExecute = nameof(CanCancel))]
     private void Cancel()
     {
-        if (!_disposed)
+        if (_disposed)
+        {
+            return;
+        }
+
+        _pauseRequested = false;
+
+        if (IsActive)
         {
             _cancellation.Cancel();
+            return;
         }
+
+        // Already stopped: there is nothing to interrupt, only a partial file to remove.
+        Settle(DownloadStatus.Cancelled, "Cancelled");
+        DiscardPartial();
+    }
+
+    private bool CanPause => IsActive && ServerSupportsResume;
+
+    [RelayCommand(CanExecute = nameof(CanPause))]
+    private void Pause()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _pauseRequested = true;
+        _cancellation.Cancel();
+    }
+
+    private bool CanResume => IsResumable;
+
+    [RelayCommand(CanExecute = nameof(CanResume))]
+    private async Task ResumeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _cancellation.Dispose();
+        _cancellation = new CancellationTokenSource();
+
+        Status = DownloadStatus.Pending;
+        Detail = "Queued";
+        IsIndeterminate = true;
+
+        await RunAsync();
+    }
+
+    private void OnPlanned(DownloadPlan plan)
+    {
+        DestinationPath = plan.DestinationPath;
+        FileName = Path.GetFileName(plan.DestinationPath);
+        ServerSupportsResume = plan.ServerSupportsResume;
+        PauseCommand.NotifyCanExecuteChanged();
+
+        if (plan.ResumedFrom > 0)
+        {
+            Detail = $"Resuming from {FormatBytes(plan.ResumedFrom)}";
+        }
+
+        // Anchor the rate window at the resume point so the first sample is not a spike.
+        _lastBytes = plan.ResumedFrom;
+        _lastTimestamp = Stopwatch.GetTimestamp();
     }
 
     private void OnRetry(DownloadRetry retry)
     {
         Status = DownloadStatus.Pending;
-        IsIndeterminate = true;
-        Percentage = 0;
         SpeedText = string.Empty;
         RemainingText = string.Empty;
         Detail = $"{retry.Reason} — retrying in {retry.Delay.TotalSeconds:0}s "
@@ -172,6 +269,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     private void OnProgress(DownloadProgress progress)
     {
+        Status = DownloadStatus.Running;
         IsIndeterminate = progress.TotalBytes is null;
         Percentage = progress.Percentage ?? 0;
 
@@ -206,13 +304,14 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             : string.Empty;
     }
 
-    private void Fail(DownloadStatus status, string detail)
+    private void Settle(DownloadStatus status, string detail)
     {
         Status = status;
         Detail = detail;
         IsIndeterminate = false;
         SpeedText = string.Empty;
         RemainingText = string.Empty;
+        _bytesPerSecond = 0;
     }
 
     private static string PreviewFileName(string address) =>

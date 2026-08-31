@@ -23,9 +23,7 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
 
     public async Task<DownloadResult> EnqueueAsync(
         string address,
-        IProgress<DownloadProgress>? progress = null,
-        Action? onStarted = null,
-        Action<DownloadRetry>? onRetry = null,
+        DownloadCallbacks? callbacks = null,
         CancellationToken cancellationToken = default)
     {
         SemaphoreSlim host = HostSlotsFor(address);
@@ -43,8 +41,8 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
             {
                 // Only now is the transfer really beginning; the caller has been showing it
                 // as queued until this point.
-                onStarted?.Invoke();
-                return await _startDownload.ExecuteAsync(address, progress, onRetry, cancellationToken);
+                callbacks?.Started?.Invoke();
+                return await _startDownload.ExecuteAsync(address, callbacks, cancellationToken);
             }
             finally
             {
@@ -56,6 +54,8 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
             host.Release();
         }
     }
+
+    public void Discard(string destinationPath) => _startDownload.Discard(destinationPath);
 
     private SemaphoreSlim HostSlotsFor(string address)
     {

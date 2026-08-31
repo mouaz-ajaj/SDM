@@ -96,7 +96,7 @@
               <Border Classes="card" Margin="0,0,0,12" Padding="22,18">
                 <StackPanel Spacing="13">
 
-                  <Grid ColumnDefinitions="*,Auto,Auto">
+                  <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto">
                     <TextBlock Classes="fileName" Text="{Binding FileName}" VerticalAlignment="Center" />
 
                     <TextBlock Grid.Column="1"
@@ -105,16 +105,31 @@
                                FontSize="19"
                                FontWeight="SemiBold"
                                VerticalAlignment="Center"
-                               IsVisible="{Binding IsActive}"
+                               IsVisible="{Binding ShowsProgress}"
                                Foreground="{StaticResource BrandGradientBrush}" />
 
                     <Button Grid.Column="2"
-                            Classes="iconDanger"
-                            Margin="12,0,0,0"
-                            Content="✕"
-                            ToolTip.Tip="Cancel this download"
-                            Command="{Binding CancelCommand}"
+                            Classes="iconGhost"
+                            Margin="10,0,0,0"
+                            Content="❚❚"
+                            ToolTip.Tip="Pause — keeps what has already been downloaded"
+                            Command="{Binding PauseCommand}"
                             IsVisible="{Binding IsActive}" />
+
+                    <Button Grid.Column="3"
+                            Classes="iconGhost"
+                            Margin="10,0,0,0"
+                            Content="▶"
+                            ToolTip.Tip="Resume from where it stopped"
+                            Command="{Binding ResumeCommand}"
+                            IsVisible="{Binding IsResumable}" />
+
+                    <Button Grid.Column="4"
+                            Classes="iconDanger"
+                            Margin="8,0,0,0"
+                            Content="✕"
+                            ToolTip.Tip="Cancel and delete what has been downloaded"
+                            Command="{Binding CancelCommand}" />
                   </Grid>
 
                   <ProgressBar Classes="brand"
@@ -122,7 +137,7 @@
                                Maximum="100"
                                Value="{Binding Percentage}"
                                IsIndeterminate="{Binding IsIndeterminate}"
-                               IsVisible="{Binding IsActive}" />
+                               IsVisible="{Binding ShowsProgress}" />
 
                   <Grid ColumnDefinitions="*,Auto,Auto">
                     <TextBlock Classes="metric" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
@@ -158,7 +173,7 @@
     <!-- Footer -->
     <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Margin="0,20,0,0">
       <TextBlock Classes="footnote" Text="WINDOWS-FIRST · PORTABLE ARCHITECTURE" LetterSpacing="1.2" />
-      <TextBlock Grid.Column="1" Classes="footnote" Text="Pause and resume arrive in the next phase" />
+      <TextBlock Grid.Column="1" Classes="footnote" Text="Persistent history arrives in the next phase" />
     </Grid>
 
   </Grid>

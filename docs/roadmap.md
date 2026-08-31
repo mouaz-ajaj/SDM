@@ -96,7 +96,7 @@ meaningless last segment, and the archive passed an integrity check.
 - The destination filename is sanitized — a hostile `Content-Disposition` cannot
   write outside the Downloads folder.
 
-### Phase 2.3 — Download list, cancel, concurrency
+### Phase 2.3 — Download list, cancel, concurrency — DONE
 
 **Scope**
 - `ObservableCollection<DownloadItemViewModel>` replacing the single progress bar.
@@ -138,7 +138,7 @@ resume exists, this restriction should be lifted.
 
 ## Track B — Make it reliable (3 sessions)
 
-### Phase 3.1 — Resume
+### Phase 3.1 — Resume — CODE COMPLETE, HAND-VERIFICATION PENDING
 
 **Scope**
 - Probe `Accept-Ranges`; download into a `.part` file; on resume send
@@ -152,6 +152,12 @@ resume exists, this restriction should be lifted.
 - Pause mid-download, resume, final SHA-256 matches the complete file.
 - Kill the process mid-download, reopen, resume completes correctly.
 - A `Range`-less server degrades gracefully instead of producing a corrupt file.
+
+**Known limitation until Phase 3.2.** A partial file is matched to its URL by a
+`.part.meta` sidecar, which survives the process being killed. But the application
+itself forgets the queue on exit, so resuming after a restart means pasting the same
+address again; the engine then recognises the partial and continues. Persistence
+turns that into a list that simply reappears.
 
 ### Phase 3.2 — SQLite persistence
 

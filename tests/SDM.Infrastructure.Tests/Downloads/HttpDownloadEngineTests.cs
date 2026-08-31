@@ -32,7 +32,7 @@ public sealed class HttpDownloadEngineTests : IDisposable
         Assert.Equal(Path.Combine(_workingDirectory, "payload.bin"), result.DestinationPath);
         Assert.Equal(PayloadSize, result.BytesWritten);
         Assert.Equal(Hash(_payload), Hash(written));
-        Assert.False(File.Exists(result.DestinationPath + ".part"));
+        Assert.Single(Directory.GetFiles(_workingDirectory));
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed class HttpDownloadEngineTests : IDisposable
 
         await engine.DownloadAsync(
             new DownloadRequest(server.Url("slow.bin"), _workingDirectory),
-            new SynchronousProgress<DownloadProgress>(reports.Add),
+            Watching(reports),
             TestContext.Current.CancellationToken);
 
         Assert.True(reports.Count >= 2, "Expected repeated progress reports, got " + reports.Count);
@@ -62,19 +62,106 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
-    public async Task DownloadAsync_WhenCancelledMidTransfer_LeavesNothingBehind()
+    public async Task DownloadAsync_WhenCancelled_KeepsThePartialFileSoItCanBeResumed()
     {
         using LocalHttpServer server = new(ServeAsync);
         await using ServiceProvider provider = BuildProvider();
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
 
-        using CancellationTokenSource cancellation = new();
-        SynchronousProgress<DownloadProgress> progress = new(_ => cancellation.Cancel());
+        await CancelPartWayThroughAsync(engine, server.Url("resumable.bin"));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.DownloadAsync(
-            new DownloadRequest(server.Url("slow.bin"), _workingDirectory),
-            progress,
-            cancellation.Token));
+        string partial = Path.Combine(_workingDirectory, "resumable.bin.part");
+
+        Assert.True(File.Exists(partial), "Cancelling must leave something to resume from.");
+        Assert.True(File.Exists(partial + ".meta"), "The partial file must record which URL it belongs to.");
+        Assert.False(File.Exists(Path.Combine(_workingDirectory, "resumable.bin")));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_ResumesFromThePartialFileAndProducesTheCorrectBytes()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        long interrupted = await CancelPartWayThroughAsync(engine, server.Url("resumable.bin"));
+
+        DownloadPlan? plan = null;
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("resumable.bin"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(plan);
+        Assert.Equal(interrupted, plan!.ResumedFrom);
+        Assert.True(plan.ResumedFrom > 0, "The second attempt should have continued, not restarted.");
+        Assert.Equal(PayloadSize, plan.TotalBytes);
+        Assert.Equal(PayloadSize, result.BytesWritten);
+        Assert.Equal(Hash(_payload), Hash(written));
+        Assert.Single(Directory.GetFiles(_workingDirectory));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_WhenTheServerIgnoresRange_StartsAgainRatherThanCorruptTheFile()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        await CancelPartWayThroughAsync(engine, server.Url("ignores-range.bin"));
+
+        DownloadPlan? plan = null;
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("ignores-range.bin"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, plan!.ResumedFrom);
+        Assert.Equal(PayloadSize, result.BytesWritten);
+        Assert.Equal(Hash(_payload), Hash(written));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_NeverResumesAPartialFileThatBelongsToADifferentUrl()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        // Leaves resumable.bin.part behind, owned by /resumable.bin.
+        await CancelPartWayThroughAsync(engine, server.Url("resumable.bin"));
+
+        // A different URL whose last segment is also "resumable.bin". Appending this
+        // server's bytes to the other one's partial would silently corrupt the file.
+        DownloadPlan? plan = null;
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("decoy/resumable.bin"), _workingDirectory),
+            new DownloadCallbacks { Planned = value => plan = value },
+            TestContext.Current.CancellationToken);
+
+        byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, plan!.ResumedFrom);
+        Assert.Equal(Path.Combine(_workingDirectory, "resumable (1).bin"), result.DestinationPath);
+        Assert.Equal(Hash(_small), Hash(written));
+        Assert.True(File.Exists(Path.Combine(_workingDirectory, "resumable.bin.part")),
+            "The unrelated partial file must be left alone.");
+    }
+
+    [Fact]
+    public async Task DiscardPartial_RemovesThePartialFileAndItsMetadata()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        await CancelPartWayThroughAsync(engine, server.Url("resumable.bin"));
+
+        engine.DiscardPartial(Path.Combine(_workingDirectory, "resumable.bin"));
 
         Assert.Empty(Directory.GetFiles(_workingDirectory));
     }
@@ -128,7 +215,6 @@ public sealed class HttpDownloadEngineTests : IDisposable
 
         Assert.True(exception.IsTransient);
         Assert.Contains("stopped sending data", exception.Message, StringComparison.Ordinal);
-        Assert.Empty(Directory.GetFiles(_workingDirectory));
     }
 
     [Fact]
@@ -141,7 +227,7 @@ public sealed class HttpDownloadEngineTests : IDisposable
 
         DownloadResult result = await engine.DownloadAsync(
             new DownloadRequest(server.Url("chunked.bin"), _workingDirectory),
-            new SynchronousProgress<DownloadProgress>(reports.Add),
+            Watching(reports),
             TestContext.Current.CancellationToken);
 
         byte[] written = await File.ReadAllBytesAsync(result.DestinationPath, TestContext.Current.CancellationToken);
@@ -216,6 +302,30 @@ public sealed class HttpDownloadEngineTests : IDisposable
         Assert.Equal(nested, Path.GetDirectoryName(result.DestinationPath));
     }
 
+    /// <summary>Starts a transfer and cancels it once some bytes have landed.</summary>
+    private async Task<long> CancelPartWayThroughAsync(IDownloadEngine engine, Uri source)
+    {
+        using CancellationTokenSource cancellation = new();
+        long received = 0;
+
+        DownloadCallbacks callbacks = new()
+        {
+            Progress = new SynchronousProgress<DownloadProgress>(report =>
+            {
+                received = report.BytesReceived;
+                cancellation.Cancel();
+            }),
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => engine.DownloadAsync(new DownloadRequest(source, _workingDirectory), callbacks, cancellation.Token));
+
+        return received;
+    }
+
+    private static DownloadCallbacks Watching(List<DownloadProgress> reports) =>
+        new() { Progress = new SynchronousProgress<DownloadProgress>(reports.Add) };
+
     private static ServiceProvider BuildProvider(int idleTimeoutSeconds = 60)
     {
         ServiceCollection services = new();
@@ -237,12 +347,28 @@ public sealed class HttpDownloadEngineTests : IDisposable
 
             case "/slow.bin":
                 context.Response.ContentLength64 = _payload.Length;
-                await WriteInChunksAsync(context, cancellationToken);
+                await WriteInChunksAsync(context, 0, cancellationToken);
                 break;
 
             case "/chunked.bin":
                 context.Response.SendChunked = true;
-                await WriteInChunksAsync(context, cancellationToken);
+                await WriteInChunksAsync(context, 0, cancellationToken);
+                break;
+
+            case "/resumable.bin":
+                await ServeRangeAsync(context, cancellationToken);
+                break;
+
+            case "/ignores-range.bin":
+                // Answers 200 with the whole body even when a Range was asked for, which
+                // is what a server without range support does.
+                context.Response.ContentLength64 = _payload.Length;
+                await WriteInChunksAsync(context, 0, cancellationToken);
+                break;
+
+            case "/decoy/resumable.bin":
+                context.Response.ContentLength64 = _small.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
                 break;
 
             case "/opaque-id":
@@ -277,15 +403,48 @@ public sealed class HttpDownloadEngineTests : IDisposable
         }
     }
 
-    private async Task WriteInChunksAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    /// <summary>A server that honours <c>Range</c> the way a real download host does.</summary>
+    private async Task ServeRangeAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    {
+        context.Response.AddHeader("Accept-Ranges", "bytes");
+        context.Response.AddHeader("ETag", "\"payload-v1\"");
+
+        long start = ParseRangeStart(context.Request.Headers["Range"]);
+
+        if (start > 0)
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.PartialContent;
+            context.Response.AddHeader(
+                "Content-Range", $"bytes {start}-{_payload.Length - 1}/{_payload.Length}");
+        }
+
+        context.Response.ContentLength64 = _payload.Length - start;
+        await WriteInChunksAsync(context, start, cancellationToken);
+    }
+
+    private static long ParseRangeStart(string? header)
+    {
+        const string Prefix = "bytes=";
+
+        if (header is null || !header.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        string value = header[Prefix.Length..].Split('-')[0];
+        return long.TryParse(value, out long start) ? start : 0;
+    }
+
+    private async Task WriteInChunksAsync(HttpListenerContext context, long from, CancellationToken cancellationToken)
     {
         const int ChunkSize = 64 * 1024;
 
-        for (int offset = 0; offset < _payload.Length; offset += ChunkSize)
+        for (long offset = from; offset < _payload.Length; offset += ChunkSize)
         {
-            int length = Math.Min(ChunkSize, _payload.Length - offset);
+            int length = (int)Math.Min(ChunkSize, _payload.Length - offset);
 
-            await context.Response.OutputStream.WriteAsync(_payload.AsMemory(offset, length), cancellationToken);
+            await context.Response.OutputStream.WriteAsync(
+                _payload.AsMemory((int)offset, length), cancellationToken);
             await context.Response.OutputStream.FlushAsync(cancellationToken);
 
             // Slow enough that the transfer spans several progress intervals and can be

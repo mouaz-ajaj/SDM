@@ -72,18 +72,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         foreach (DownloadItemViewModel finished in Downloads.Where(d => !d.IsActive).ToList())
         {
+            // Removing a paused or failed row is the user abandoning it, so its partial
+            // file goes too rather than lingering in the download folder for ever.
+            if (!finished.IsCompleted)
+            {
+                finished.DiscardPartial();
+            }
+
             Downloads.Remove(finished);
             finished.Dispose();
         }
     }
 
     /// <summary>
-    /// Cancels every running transfer and waits for their partial files to be removed.
+    /// Stops every running transfer and waits for it to unwind before the process exits.
     /// Called while the window is closing, before the process is allowed to exit.
     /// </summary>
     public async Task ShutdownAsync()
     {
-        await Task.WhenAll(Downloads.Select(download => download.CancelAndWaitAsync()));
+        // Closing is not abandoning: partial files are kept so the transfers can be
+        // resumed the next time the application starts.
+        await Task.WhenAll(Downloads.Select(download => download.StopAndWaitAsync(keepPartialFile: true)));
 
         foreach (DownloadItemViewModel download in Downloads)
         {

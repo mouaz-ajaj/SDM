@@ -39,10 +39,10 @@ public sealed class DownloadSchedulerTests
         bool secondStarted = false;
 
         Task first = scheduler.EnqueueAsync(
-            "https://example.test/a.bin", onStarted: () => firstStarted = true,
+            "https://example.test/a.bin", new DownloadCallbacks { Started = () => firstStarted = true },
             cancellationToken: TestContext.Current.CancellationToken);
         Task second = scheduler.EnqueueAsync(
-            "https://example.test/b.bin", onStarted: () => secondStarted = true,
+            "https://example.test/b.bin", new DownloadCallbacks { Started = () => secondStarted = true },
             cancellationToken: TestContext.Current.CancellationToken);
 
         await useCase.WaitForRunningAsync(1, TestContext.Current.CancellationToken);
@@ -138,10 +138,13 @@ public sealed class DownloadSchedulerTests
 
         public int PeakConcurrency { get; private set; }
 
+        public void Discard(string destinationPath)
+        {
+        }
+
         public async Task<DownloadResult> ExecuteAsync(
             string address,
-            IProgress<DownloadProgress>? progress = null,
-            Action<DownloadRetry>? onRetry = null,
+            DownloadCallbacks? callbacks = null,
             CancellationToken cancellationToken = default)
         {
             lock (_sync)
