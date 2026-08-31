@@ -9,31 +9,25 @@ namespace SDM.IntegrationTests.Settings;
 
 public sealed class JsonUserSettingsStoreTests : IDisposable
 {
-    private readonly string _path = SdmPaths.UserSettingsPath;
-    private readonly string? _original;
+    // A temporary path, never the real per-user file: two test classes sharing one real
+    // file fight each other when xUnit runs them at the same time.
+    private readonly string _directory = Directory.CreateTempSubdirectory("sdm-store-").FullName;
 
-    public JsonUserSettingsStoreTests()
-    {
-        // The store deliberately writes to the real per-user location, so the existing
-        // file is put back afterwards rather than clobbered by a test run.
-        _original = File.Exists(_path) ? File.ReadAllText(_path) : null;
-    }
+    private string Path => System.IO.Path.Combine(_directory, "settings.json");
 
     [Fact]
-    public void Path_IsOutsideTheInstallationFolder()
+    public void Path_DefaultsToOutsideTheInstallationFolder()
     {
-        JsonUserSettingsStore store = Create();
+        JsonUserSettingsStore store = new(NullLogger<JsonUserSettingsStore>.Instance);
 
-        Assert.EndsWith("settings.json", store.Path, StringComparison.Ordinal);
+        Assert.Equal(SdmPaths.UserSettingsPath, store.Path);
         Assert.DoesNotContain(AppContext.BaseDirectory, store.Path, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task SaveAsync_WritesTheConfigurationShapeTheApplicationReadsBack()
     {
-        JsonUserSettingsStore store = Create();
-
-        await store.SaveAsync(
+        await Create().SaveAsync(
             new UserSettings
             {
                 DownloadFolder = @"D:\Downloads",
@@ -42,8 +36,7 @@ public sealed class JsonUserSettingsStoreTests : IDisposable
             },
             TestContext.Current.CancellationToken);
 
-        JsonObject root = Read();
-        JsonObject downloads = Assert.IsType<JsonObject>(root["Downloads"]);
+        JsonObject downloads = Assert.IsType<JsonObject>(Read()["Downloads"]);
 
         Assert.Equal(@"D:\Downloads", (string?)downloads["Folder"]);
         Assert.True((bool?)downloads["AskWhereToSave"]);
@@ -55,9 +48,8 @@ public sealed class JsonUserSettingsStoreTests : IDisposable
     {
         // The file belongs to the user: a hand-written FileLog section must survive the
         // settings screen saving something else.
-        SdmPaths.EnsureUserDataDirectory();
         await File.WriteAllTextAsync(
-            _path,
+            Path,
             """{"FileLog":{"MinimumLevel":"Debug"},"Downloads":{"MaximumConcurrent":9}}""",
             TestContext.Current.CancellationToken);
 
@@ -72,36 +64,40 @@ public sealed class JsonUserSettingsStoreTests : IDisposable
     [Fact]
     public async Task SaveAsync_ReplacesAFileItCannotParse()
     {
-        SdmPaths.EnsureUserDataDirectory();
-        await File.WriteAllTextAsync(_path, "{ this is not json", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path, "{ this is not json", TestContext.Current.CancellationToken);
 
         await Create().SaveAsync(new UserSettings(), TestContext.Current.CancellationToken);
 
         Assert.NotNull(Read()["Downloads"]);
     }
 
-    private static JsonUserSettingsStore Create() => new(NullLogger<JsonUserSettingsStore>.Instance);
+    [Fact]
+    public async Task SaveAsync_CreatesTheFolderWhenItIsNotThereYet()
+    {
+        string nested = System.IO.Path.Combine(_directory, "nested", "settings.json");
+        JsonUserSettingsStore store = new(NullLogger<JsonUserSettingsStore>.Instance, nested);
+
+        await store.SaveAsync(new UserSettings(), TestContext.Current.CancellationToken);
+
+        Assert.True(File.Exists(nested));
+    }
+
+    private JsonUserSettingsStore Create() =>
+        new(NullLogger<JsonUserSettingsStore>.Instance, Path);
 
     private JsonObject Read() =>
-        JsonNode.Parse(File.ReadAllText(_path)) as JsonObject
+        JsonNode.Parse(File.ReadAllText(Path)) as JsonObject
         ?? throw new JsonException("The settings file did not contain an object.");
 
     public void Dispose()
     {
         try
         {
-            if (_original is null)
-            {
-                File.Delete(_path);
-            }
-            else
-            {
-                File.WriteAllText(_path, _original);
-            }
+            Directory.Delete(_directory, recursive: true);
         }
         catch (IOException)
         {
-            // Restoring is best effort; failing here would mask the real test result.
+            // A leftover temp directory must not fail an otherwise passing test.
         }
     }
 }

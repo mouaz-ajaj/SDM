@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.ComponentModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -13,13 +15,25 @@ namespace SDM.Desktop.ViewModels;
 
 public sealed partial class MainWindowViewModel : ObservableObject
 {
+    private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
+
+    private static readonly FileCategory[] SidebarCategories =
+    [
+        FileCategory.Programs,
+        FileCategory.Compressed,
+        FileCategory.Documents,
+        FileCategory.Video,
+        FileCategory.Audio,
+        FileCategory.Images,
+    ];
+
     private readonly IApplicationInfoService _applicationInfo;
     private readonly IDownloadScheduler _scheduler;
     private readonly IDownloadRepository _repository;
     private readonly IDownloadFolder _downloadFolder;
     private readonly ISaveLocationPicker _picker;
     private readonly DialogSaveLocationPicker _dialogs;
-    private readonly DownloadOptions _options;
+    private readonly IOptionsMonitor<DownloadOptions> _options;
     private readonly ILogger<MainWindowViewModel> _logger;
 
     [ObservableProperty]
@@ -29,6 +43,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private string? _errorMessage;
 
+    [ObservableProperty]
+    private DownloadItemViewModel? _selected;
+
+    [ObservableProperty]
+    private FilterOptionViewModel? _selectedFilter;
+
+    [ObservableProperty]
+    private CategoryOptionViewModel? _selectedCategory;
+
+    [ObservableProperty]
+    private bool _isDetailOpen = true;
+
+    [ObservableProperty]
+    private string _totalsText = "Nothing downloading";
+
+    [ObservableProperty]
+    private string _totalSpeedText = string.Empty;
+
     public MainWindowViewModel(
         IApplicationInfoService applicationInfo,
         IDownloadScheduler scheduler,
@@ -36,7 +68,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IDownloadFolder downloadFolder,
         ISaveLocationPicker picker,
         DialogSaveLocationPicker dialogs,
-        IOptions<DownloadOptions> options,
+        IOptionsMonitor<DownloadOptions> options,
         ILogger<MainWindowViewModel> logger)
     {
         ArgumentNullException.ThrowIfNull(applicationInfo);
@@ -54,13 +86,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _downloadFolder = downloadFolder;
         _picker = picker;
         _dialogs = dialogs;
-        _options = options.Value;
+        _options = options;
         _logger = logger;
 
-        Downloads.CollectionChanged += OnDownloadsChanged;
+        Filters = [.. Enum.GetValues<TransferFilter>().Select(value => new FilterOptionViewModel(value))];
+        _selectedFilter = Filters[0];
+
+        Categories = [.. SidebarCategories.Select(category => new CategoryOptionViewModel(category))];
+
+        All.CollectionChanged += OnAllChanged;
     }
 
-    public ObservableCollection<DownloadItemViewModel> Downloads { get; } = [];
+    /// <summary>Every transfer. The table shows a filtered view of this.</summary>
+    public ObservableCollection<DownloadItemViewModel> All { get; } = [];
+
+    public ObservableCollection<DownloadItemViewModel> Visible { get; } = [];
+
+    public ObservableCollection<FilterOptionViewModel> Filters { get; }
+
+    public ObservableCollection<CategoryOptionViewModel> Categories { get; }
 
     public string Name => _applicationInfo.Name;
 
@@ -68,9 +112,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public string Version => $"v{_applicationInfo.Version}";
 
-    public bool HasDownloads => Downloads.Count > 0;
+    public string DownloadFolderText => _downloadFolder.GetPath();
 
-    public bool HasActiveDownloads => Downloads.Any(download => download.IsActive);
+    public string ConnectionBudgetText => $"{_options.CurrentValue.MaximumConnectionsPerHost} conn / host";
+
+    public bool HasDownloads => All.Count > 0;
+
+    public bool HasActiveDownloads => All.Any(download => download.IsActive);
 
     /// <summary>
     /// Restores the list saved by the previous run. Anything that was still transferring
@@ -83,10 +131,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             foreach (DownloadJob job in await _repository.GetAllAsync())
             {
-                Downloads.Add(DownloadItemViewModel.Restore(_scheduler, _repository, _logger, job));
+                Track(DownloadItemViewModel.Restore(_scheduler, _repository, _logger, job));
             }
 
-            _logger.LogInformation("Restored {Count} transfers from the previous session.", Downloads.Count);
+            _logger.LogInformation("Restored {Count} transfers from the previous session.", All.Count);
         }
         catch (Exception exception)
         {
@@ -94,6 +142,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _logger.LogError(exception, "Could not restore the previous session's transfers.");
             ErrorMessage = "Previous downloads could not be restored.";
         }
+
+        Refresh();
     }
 
     private bool CanAdd => !string.IsNullOrWhiteSpace(Address);
@@ -113,7 +163,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ErrorMessage = null;
         DownloadDestination? destination = null;
 
-        if (_options.AskWhereToSave)
+        if (_options.CurrentValue.AskWhereToSave)
         {
             destination = await ChooseDestinationAsync(address, source);
 
@@ -130,7 +180,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         DownloadItemViewModel item = DownloadItemViewModel.Create(
             _scheduler, _repository, _logger, address, destination);
 
-        Downloads.Insert(0, item);
+        Track(item, atTop: true);
+        Selected = item;
 
         // RunAsync never throws — it turns every failure into the row's own status — so
         // there is no unobserved task to await here.
@@ -166,10 +217,35 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private Task OpenSettingsAsync() => _dialogs.ShowSettingsAsync();
 
+    /// <summary>
+    /// Status and category are two ways of narrowing the same list, so choosing one
+    /// clears the other rather than quietly combining into an empty result.
+    /// </summary>
+    partial void OnSelectedFilterChanged(FilterOptionViewModel? value)
+    {
+        if (value is not null)
+        {
+            SelectedCategory = null;
+            Refresh();
+        }
+    }
+
+    partial void OnSelectedCategoryChanged(CategoryOptionViewModel? value)
+    {
+        if (value is not null)
+        {
+            SelectedFilter = null;
+            Refresh();
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleDetail() => IsDetailOpen = !IsDetailOpen;
+
     [RelayCommand]
     private async Task ClearFinishedAsync()
     {
-        foreach (DownloadItemViewModel finished in Downloads.Where(d => !d.IsActive).ToList())
+        foreach (DownloadItemViewModel finished in All.Where(item => !item.IsActive).ToList())
         {
             // Removing a paused or failed row is the user abandoning it, so its partial
             // file goes too rather than lingering in the download folder for ever.
@@ -178,10 +254,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 finished.DiscardPartial();
             }
 
-            Downloads.Remove(finished);
+            Untrack(finished);
             await finished.ForgetAsync();
             finished.Dispose();
         }
+
+        Refresh();
     }
 
     /// <summary>
@@ -192,17 +270,126 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         // Closing is not abandoning: partial files are kept so the transfers can be
         // resumed the next time the application starts.
-        await Task.WhenAll(Downloads.Select(download => download.StopAndWaitAsync(keepPartialFile: true)));
+        await Task.WhenAll(All.Select(download => download.StopAndWaitAsync(keepPartialFile: true)));
 
-        foreach (DownloadItemViewModel download in Downloads)
+        foreach (DownloadItemViewModel download in All)
         {
             download.Dispose();
         }
     }
 
-    private void OnDownloadsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    private void Track(DownloadItemViewModel item, bool atTop = false)
+    {
+        // A row's status changes which filter it belongs to and every count beside it, so
+        // the list listens to each row rather than re-reading them on a timer.
+        item.PropertyChanged += OnItemChanged;
+
+        if (atTop)
+        {
+            All.Insert(0, item);
+        }
+        else
+        {
+            All.Add(item);
+        }
+    }
+
+    private void Untrack(DownloadItemViewModel item)
+    {
+        item.PropertyChanged -= OnItemChanged;
+        All.Remove(item);
+
+        if (ReferenceEquals(Selected, item))
+        {
+            Selected = null;
+        }
+    }
+
+    private void OnItemChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(DownloadItemViewModel.Status)
+            or nameof(DownloadItemViewModel.CategoryName))
+        {
+            Refresh();
+        }
+        else if (e.PropertyName is nameof(DownloadItemViewModel.SpeedText))
+        {
+            UpdateTotals();
+        }
+    }
+
+    private void OnAllChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         OnPropertyChanged(nameof(HasDownloads));
         OnPropertyChanged(nameof(HasActiveDownloads));
+        Refresh();
+    }
+
+    /// <summary>Rebuilds the visible rows and every count in the sidebar.</summary>
+    private void Refresh()
+    {
+        DownloadItemViewModel? keep = Selected;
+
+        Visible.Clear();
+
+        foreach (DownloadItemViewModel item in All.Where(Matches))
+        {
+            Visible.Add(item);
+        }
+
+        foreach (FilterOptionViewModel option in Filters)
+        {
+            option.Count = All.Count(item => TransferFilters.Matches(option.Filter, item));
+        }
+
+        foreach (CategoryOptionViewModel category in Categories)
+        {
+            category.Count = All.Count(
+                item => string.Equals(item.CategoryName, category.Name, StringComparison.Ordinal));
+        }
+
+        // Clearing the collection drops the selection, so it is put back rather than
+        // making the detail panel blink every time a row changes status.
+        Selected = keep is not null && Visible.Contains(keep) ? keep : Visible.FirstOrDefault();
+
+        UpdateTotals();
+    }
+
+    private bool Matches(DownloadItemViewModel item)
+    {
+        if (SelectedCategory is { } category)
+        {
+            return string.Equals(item.CategoryName, category.Name, StringComparison.Ordinal);
+        }
+
+        return TransferFilters.Matches(SelectedFilter?.Filter ?? TransferFilter.All, item);
+    }
+
+    private void UpdateTotals()
+    {
+        int running = All.Count(item => item.Status is DownloadStatus.Running);
+        int queued = All.Count(item => item.Status is DownloadStatus.Pending);
+        int paused = All.Count(item => item.Status is DownloadStatus.Paused);
+
+        TotalsText = All.Count == 0
+            ? "Nothing downloading"
+            : $"{running} active · {queued} queued · {paused} paused";
+
+        double bytesPerSecond = All.Sum(item => item.BytesPerSecond);
+        TotalSpeedText = bytesPerSecond > 0 ? FormatBytes((long)bytesPerSecond) + "/s" : string.Empty;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        double value = bytes;
+        int unit = 0;
+
+        while (value >= 1024 && unit < ByteUnits.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return string.Create(CultureInfo.CurrentCulture, $"{value:0.#} {ByteUnits[unit]}");
     }
 }

@@ -21,6 +21,7 @@ internal sealed class SegmentedTransfer
     private readonly string _partialPath;
     private readonly PartialFileMetadata _metadata;
     private readonly IProgress<DownloadProgress>? _progress;
+    private readonly IProgress<IReadOnlyList<SegmentProgress>>? _segmentProgress;
     private readonly long _totalBytes;
 
     private readonly Stopwatch _sinceLastReport = Stopwatch.StartNew();
@@ -33,8 +34,10 @@ internal sealed class SegmentedTransfer
         string partialPath,
         PartialFileMetadata metadata,
         long totalBytes,
-        IProgress<DownloadProgress>? progress)
+        IProgress<DownloadProgress>? progress,
+        IProgress<IReadOnlyList<SegmentProgress>>? segmentProgress = null)
     {
+        _segmentProgress = segmentProgress;
         _segments = segments;
         _partialPath = partialPath;
         _metadata = metadata;
@@ -171,6 +174,7 @@ internal sealed class SegmentedTransfer
             if (_sinceLastReport.Elapsed >= ProgressInterval)
             {
                 _progress?.Report(new DownloadProgress(_bytesWritten, _totalBytes));
+                _segmentProgress?.Report(Snapshot());
                 _sinceLastReport.Restart();
             }
 
@@ -186,6 +190,21 @@ internal sealed class SegmentedTransfer
         {
             Checkpoint();
         }
+    }
+
+    /// <summary>A copy safe to hand to the interface while segments keep advancing.</summary>
+    private IReadOnlyList<SegmentProgress> Snapshot()
+    {
+        SegmentProgress[] snapshot = new SegmentProgress[_segments.Length];
+
+        for (int index = 0; index < _segments.Length; index++)
+        {
+            SegmentState segment = _segments[index];
+            snapshot[index] = new SegmentProgress(
+                index + 1, segment.Start, segment.End, segment.Completed);
+        }
+
+        return snapshot;
     }
 
     /// <summary>Writes segment positions to disk so an interrupted split transfer can resume.</summary>

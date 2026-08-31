@@ -46,6 +46,153 @@
     <Setter Property="TextWrapping" Value="Wrap" />
   </Style>
 
+  <!-- Console typography: a dense table needs its own, smaller scale -->
+
+  <Style Selector="TextBlock.columnLabel">
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="LetterSpacing" Value="1.2" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.cell">
+    <Setter Property="FontSize" Value="11.5" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.fieldLabel">
+    <Setter Property="FontSize" Value="10.5" />
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.fieldValue">
+    <Setter Property="FontSize" Value="10.5" />
+    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+  </Style>
+
+  <!-- Sidebar list: a nav row, not a data row -->
+
+  <Style Selector="ListBox.nav">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="ListBox.nav ListBoxItem">
+    <Setter Property="Padding" Value="8,7" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+  </Style>
+
+  <Style Selector="ListBox.nav ListBoxItem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#0F1926" />
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+
+  <Style Selector="ListBox.nav ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+
+  <Style Selector="ListBox.nav ListBoxItem:selected">
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+  </Style>
+
+  <!-- Transfer table: rows are data, so the selected one is marked, not filled -->
+
+  <Style Selector="ListBox.table">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="ListBox.table ListBoxItem">
+    <Setter Property="Padding" Value="9,0,0,0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="#131E2B" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+  </Style>
+
+  <Style Selector="ListBox.table ListBoxItem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#0E1722" />
+  </Style>
+
+  <Style Selector="ListBox.table ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="#14202F" />
+  </Style>
+
+  <!-- Detail tabs -->
+
+  <Style Selector="TabControl.detail">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="TabControl.detail TabItem">
+    <Setter Property="FontSize" Value="11.5" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Padding" Value="12,9" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+  </Style>
+
+  <Style Selector="TabControl.detail TabItem:selected">
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+  </Style>
+
+  <!-- Compact variants for the toolbar -->
+
+  <Style Selector="TextBox.address.compact">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Padding" Value="12,0" />
+    <Setter Property="CornerRadius" Value="9" />
+  </Style>
+
+  <Style Selector="TextBox.address.compact /template/ Border#PART_BorderElement">
+    <Setter Property="CornerRadius" Value="9" />
+  </Style>
+
+  <Style Selector="Button.primary.compact">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Padding" Value="16,0" />
+  </Style>
+
+  <Style Selector="Button.primary.compact /template/ Border#Shell">
+    <Setter Property="CornerRadius" Value="9" />
+  </Style>
+
+  <Style Selector="Button.iconGhost.small, Button.iconDanger.small">
+    <Setter Property="Width" Value="24" />
+    <Setter Property="Height" Value="24" />
+    <Setter Property="FontSize" Value="9.5" />
+  </Style>
+
+  <Style Selector="Button.iconGhost.small /template/ Border#Shell,
+                   Button.iconDanger.small /template/ Border#Shell">
+    <Setter Property="CornerRadius" Value="12" />
+  </Style>
+
+  <!-- A row's progress bar is thinner than a card's -->
+
+  <Style Selector="ProgressBar.row">
+    <Setter Property="Height" Value="5" />
+    <Setter Property="MinHeight" Value="5" />
+    <Setter Property="CornerRadius" Value="3" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Foreground" Value="{StaticResource BrandGradientBrush}" />
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
   <!-- Card: the single container shape the whole layout is built from -->
 
   <Style Selector="Border.card">

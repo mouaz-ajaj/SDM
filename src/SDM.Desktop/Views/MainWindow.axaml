@@ -5,184 +5,291 @@
         x:DataType="vm:MainWindowViewModel"
         Title="SDM — Speed Download Manager"
         Icon="/Assets/Branding/sdm-mark.png"
-        Width="900"
-        Height="660"
-        MinWidth="740"
+        Width="960"
+        Height="680"
+        MinWidth="820"
         MinHeight="560"
         FontFamily="Segoe UI"
         Background="{StaticResource WindowBackgroundBrush}">
 
-  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="40,34,40,26">
+  <Grid ColumnDefinitions="182,*">
 
-    <!-- Header -->
-    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
-      <Image Source="/Assets/Branding/sdm-mark.png" Width="46" Height="46" VerticalAlignment="Center" />
+    <!-- Sidebar -->
+    <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,*,Auto" Background="#0A0F16">
+      <Border Grid.Row="0" Grid.RowSpan="5" BorderBrush="{StaticResource StrokeBrush}"
+              BorderThickness="0,0,1,0" />
 
-      <StackPanel Grid.Column="1" Margin="16,0,0,0" Spacing="3" VerticalAlignment="Center">
-        <TextBlock Classes="wordmark" Text="{Binding Name}" />
-        <TextBlock Classes="tagline" Text="{Binding FullName}" />
+      <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10" Margin="14,16,14,0">
+        <Image Source="/Assets/Branding/sdm-mark.png" Width="24" Height="24" />
+        <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="Bold"
+                   LetterSpacing="2" VerticalAlignment="Center"
+                   Foreground="{StaticResource TextPrimaryBrush}" />
       </StackPanel>
 
-      <Border Grid.Column="2" Classes="chip" VerticalAlignment="Center">
-        <TextBlock Text="{Binding Version}"
-                   FontSize="11.5"
-                   FontWeight="SemiBold"
-                   Foreground="{StaticResource BrandSkyBrush}" />
-      </Border>
+      <StackPanel Grid.Row="1" Margin="14,18,10,0" Spacing="7">
+        <TextBlock Classes="sectionLabel" Text="TRANSFERS" Margin="8,0,0,0" />
+        <ListBox Classes="nav" ItemsSource="{Binding Filters}" SelectedItem="{Binding SelectedFilter}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:FilterOptionViewModel">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding Name}" FontSize="12" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Binding Count}" FontSize="10.5"
+                           VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </StackPanel>
+
+      <StackPanel Grid.Row="2" Margin="14,16,10,0" Spacing="7">
+        <TextBlock Classes="sectionLabel" Text="CATEGORIES" Margin="8,0,0,0" />
+        <ListBox Classes="nav" ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:CategoryOptionViewModel">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <Border Width="7" Height="7" CornerRadius="2" VerticalAlignment="Center"
+                        Background="{Binding Marker}" />
+                <TextBlock Grid.Column="1" Margin="9,0,0,0" Text="{Binding Name}"
+                           FontSize="12" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="10.5"
+                           VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </StackPanel>
+
+      <StackPanel Grid.Row="4" Margin="14,0,14,14" Spacing="10">
+        <Border Height="1" Background="{StaticResource StrokeBrush}" />
+        <Button Classes="ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                Content="Settings" Command="{Binding OpenSettingsCommand}" />
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Classes="footnote" Text="{Binding ConnectionBudgetText}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" Text="{Binding Version}" FontSize="10" FontWeight="SemiBold"
+                     VerticalAlignment="Center" Foreground="{StaticResource BrandSkyBrush}" />
+        </Grid>
+      </StackPanel>
     </Grid>
 
-    <Border Grid.Row="1" Height="1" Margin="0,26,0,0" Background="{StaticResource HairlineBrush}" />
+    <!-- Main -->
+    <Grid Grid.Column="1" RowDefinitions="Auto,Auto,Auto,*,Auto,Auto">
 
-    <!-- New download -->
-    <Border Grid.Row="2" Classes="card" Margin="0,28,0,0">
-      <StackPanel Spacing="15">
-        <TextBlock Classes="sectionLabel" Text="NEW DOWNLOAD" />
-
-        <Grid ColumnDefinitions="*,Auto">
-          <TextBox Classes="address"
-                   Text="{Binding Address}"
-                   PlaceholderText="https://example.com/file.zip" />
-
-          <Button Grid.Column="1"
-                  Classes="primary"
-                  Margin="12,0,0,0"
-                  Content="Download"
-                  Command="{Binding AddCommand}"
-                  IsDefault="True" />
-        </Grid>
-
-        <TextBlock Classes="error"
-                   Text="{Binding ErrorMessage}"
-                   IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-      </StackPanel>
-    </Border>
-
-    <!-- Transfers -->
-    <Grid Grid.Row="3" Margin="0,22,0,0" RowDefinitions="Auto,*">
-
-      <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="2,0,2,12">
-        <TextBlock Classes="sectionLabel" Text="TRANSFERS" VerticalAlignment="Center" />
-        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-          <Button Classes="ghost"
-                  Content="Clear finished"
-                  Command="{Binding ClearFinishedCommand}"
-                  IsVisible="{Binding HasDownloads}" />
-          <Button Classes="ghost" Content="Settings" Command="{Binding OpenSettingsCommand}" />
-        </StackPanel>
+      <!-- Toolbar -->
+      <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto" Margin="16,14,16,12">
+        <TextBox Classes="address compact" Text="{Binding Address}"
+                 PlaceholderText="Paste a link to download" />
+        <Button Grid.Column="1" Classes="primary compact" Margin="8,0,0,0"
+                Content="Add" Command="{Binding AddCommand}" IsDefault="True" />
+        <Button Grid.Column="2" Classes="ghost" Margin="8,0,0,0"
+                Content="Clear finished" Command="{Binding ClearFinishedCommand}"
+                IsVisible="{Binding HasDownloads}" />
+        <Button Grid.Column="3" Classes="ghost" Margin="2,0,0,0"
+                Content="Details" Command="{Binding ToggleDetailCommand}" />
       </Grid>
 
-      <!-- Empty state -->
-      <Border Grid.Row="1"
-              Classes="card"
-              IsVisible="{Binding !HasDownloads}"
-              VerticalAlignment="Top">
-        <StackPanel Spacing="7" Margin="0,14" HorizontalAlignment="Center">
-          <TextBlock Text="Nothing downloading yet"
-                     FontSize="14.5"
-                     FontWeight="SemiBold"
-                     HorizontalAlignment="Center"
-                     Foreground="{StaticResource TextSecondaryBrush}" />
-          <TextBlock Classes="footnote"
-                     Text="Paste an address above to start. Up to three run at once."
-                     HorizontalAlignment="Center" />
+      <TextBlock Grid.Row="1" Classes="error" Margin="16,0,16,10"
+                 Text="{Binding ErrorMessage}"
+                 IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+      <!-- Table header -->
+      <Grid Grid.Row="2" ColumnDefinitions="*,72,118,80,76,94,60" Margin="16,0,16,0" Height="30">
+        <Border Grid.ColumnSpan="7" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="0,1,0,1" />
+        <TextBlock Classes="columnLabel" Text="NAME" Margin="13,0,0,0" />
+        <TextBlock Grid.Column="1" Classes="columnLabel" Text="SIZE" />
+        <TextBlock Grid.Column="2" Classes="columnLabel" Text="PROGRESS" />
+        <TextBlock Grid.Column="3" Classes="columnLabel" Text="SPEED" />
+        <TextBlock Grid.Column="4" Classes="columnLabel" Text="ETA" />
+        <TextBlock Grid.Column="5" Classes="columnLabel" Text="STATUS" />
+      </Grid>
+
+      <!-- Rows -->
+      <Panel Grid.Row="3">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="7"
+                    IsVisible="{Binding !HasDownloads}">
+          <TextBlock Text="Nothing downloading yet" FontSize="14.5" FontWeight="SemiBold"
+                     HorizontalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}" />
+          <TextBlock Classes="footnote" HorizontalAlignment="Center"
+                     Text="Paste a link above. Files are sorted into category folders." />
         </StackPanel>
+
+        <ListBox Classes="table" ItemsSource="{Binding Visible}" SelectedItem="{Binding Selected}"
+                 IsVisible="{Binding HasDownloads}" Margin="16,0,16,0">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:DownloadItemViewModel">
+              <Grid ColumnDefinitions="*,72,118,80,76,94,60" Height="32">
+
+                <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+                  <Border Width="4" Height="16" CornerRadius="2" Background="{Binding CategoryBrush}" />
+                  <TextBlock Text="{Binding FileName}" FontSize="12" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"
+                             Foreground="{StaticResource TextPrimaryBrush}" />
+                </StackPanel>
+
+                <TextBlock Grid.Column="1" Classes="cell" Text="{Binding SizeText}" />
+
+                <Grid Grid.Column="2" ColumnDefinitions="*,32" VerticalAlignment="Center"
+                      Margin="0,0,10,0" IsVisible="{Binding ShowsProgress}">
+                  <ProgressBar Classes="row" Minimum="0" Maximum="100" Value="{Binding Percentage}"
+                               IsIndeterminate="{Binding IsIndeterminate}" />
+                  <TextBlock Grid.Column="1" Classes="cell" HorizontalAlignment="Right"
+                             Text="{Binding PercentageText}" />
+                </Grid>
+
+                <TextBlock Grid.Column="3" Classes="cell" Text="{Binding SpeedText}"
+                           Foreground="{StaticResource BrandSkyBrush}" />
+                <TextBlock Grid.Column="4" Classes="cell" Text="{Binding RemainingText}" />
+                <TextBlock Grid.Column="5" Classes="cell" Text="{Binding StatusText}" />
+
+                <StackPanel Grid.Column="6" Orientation="Horizontal" Spacing="2"
+                            HorizontalAlignment="Right" VerticalAlignment="Center">
+                  <Button Classes="iconGhost small" Content="❚❚" ToolTip.Tip="Pause"
+                          Command="{Binding PauseCommand}" IsVisible="{Binding IsActive}" />
+                  <Button Classes="iconGhost small" Content="▶" ToolTip.Tip="Resume"
+                          Command="{Binding ResumeCommand}" IsVisible="{Binding IsResumable}" />
+                  <Button Classes="iconDanger small" Content="✕" ToolTip.Tip="Cancel"
+                          Command="{Binding CancelCommand}" />
+                </StackPanel>
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Panel>
+
+      <!-- Detail panel -->
+      <Border Grid.Row="4" Height="248" IsVisible="{Binding IsDetailOpen}"
+              Background="#0A121B" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="0,1,0,0">
+        <Panel>
+          <TextBlock Classes="footnote" HorizontalAlignment="Center" VerticalAlignment="Center"
+                     Text="Select a transfer to see its details."
+                     IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNull}}" />
+
+          <!--
+            Visibility stays on this panel: the TabControl below swaps its DataContext to
+            the selected row, so a binding on it would look for Selected on that row.
+          -->
+          <Panel IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}">
+          <TabControl Classes="detail" Margin="10,2,10,6"
+                      x:DataType="vm:DownloadItemViewModel"
+                      DataContext="{Binding Selected}">
+
+            <TabItem Header="Details">
+              <Grid ColumnDefinitions="*,*,*" Margin="6,10,6,6">
+                <StackPanel Spacing="10">
+                  <TextBlock Classes="fileName" Text="{Binding FileName}" />
+                  <Grid ColumnDefinitions="72,*">
+                    <TextBlock Classes="fieldLabel" Text="Type" />
+                    <TextBlock Grid.Column="1" Classes="fieldValue" Text="{Binding MediaTypeText}" />
+                  </Grid>
+                  <Grid ColumnDefinitions="72,*">
+                    <TextBlock Classes="fieldLabel" Text="Category" />
+                    <TextBlock Grid.Column="1" Classes="fieldValue" Text="{Binding CategoryName}" />
+                  </Grid>
+                  <Grid ColumnDefinitions="72,*">
+                    <TextBlock Classes="fieldLabel" Text="Size" />
+                    <TextBlock Grid.Column="1" Classes="fieldValue" Text="{Binding SizeText}" />
+                  </Grid>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Spacing="10" Margin="16,0,0,0">
+                  <TextBlock Classes="sectionLabel" Text="SOURCE AND DESTINATION" />
+                  <Grid ColumnDefinitions="62,*">
+                    <TextBlock Classes="fieldLabel" Text="From" />
+                    <TextBlock Grid.Column="1" Classes="fieldValue" Text="{Binding Address}"
+                               TextWrapping="Wrap" MaxLines="3" />
+                  </Grid>
+                  <Grid ColumnDefinitions="62,*">
+                    <TextBlock Classes="fieldLabel" Text="Saved to" />
+                    <TextBlock Grid.Column="1" Classes="fieldValue" Text="{Binding DestinationPath}"
+                               TextWrapping="Wrap" MaxLines="3" />
+                  </Grid>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Spacing="10" Margin="16,0,0,0">
+                  <TextBlock Classes="sectionLabel" Text="TRANSFER" />
+                  <Grid ColumnDefinitions="80,*">
+                    <TextBlock Classes="fieldLabel" Text="Resumable" />
+                    <TextBlock Grid.Column="1" Classes="fieldValue" Text="{Binding ResumeText}"
+                               TextWrapping="Wrap" />
+                  </Grid>
+                  <Grid ColumnDefinitions="80,*">
+                    <TextBlock Classes="fieldLabel" Text="Connections" />
+                    <TextBlock Grid.Column="1" Classes="fieldValue" Text="{Binding ConnectionsText}" />
+                  </Grid>
+                  <Grid ColumnDefinitions="80,*">
+                    <TextBlock Classes="fieldLabel" Text="Progress" />
+                    <TextBlock Grid.Column="1" Classes="fieldValue" Text="{Binding Detail}"
+                               TextWrapping="Wrap" MaxLines="3" />
+                  </Grid>
+                </StackPanel>
+              </Grid>
+            </TabItem>
+
+            <TabItem Header="Connections">
+              <ScrollViewer Margin="6,10,6,6" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="26,150,*,90,72">
+                    <TextBlock Classes="columnLabel" Text="#" />
+                    <TextBlock Grid.Column="1" Classes="columnLabel" Text="RANGE" />
+                    <TextBlock Grid.Column="2" Classes="columnLabel" Text="PROGRESS" />
+                    <TextBlock Grid.Column="3" Classes="columnLabel" Text="DONE" />
+                    <TextBlock Grid.Column="4" Classes="columnLabel" Text="STATE" />
+                  </Grid>
+
+                  <ItemsControl ItemsSource="{Binding Segments}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SegmentViewModel">
+                        <Grid ColumnDefinitions="26,150,*,90,72" Height="26">
+                          <TextBlock Classes="cell" Text="{Binding Index}" />
+                          <TextBlock Grid.Column="1" Classes="cell" Text="{Binding RangeText}" />
+                          <ProgressBar Grid.Column="2" Classes="row" Margin="0,0,16,0"
+                                       Minimum="0" Maximum="100" Value="{Binding Percentage}" />
+                          <TextBlock Grid.Column="3" Classes="cell" Text="{Binding CompletedText}" />
+                          <TextBlock Grid.Column="4" Classes="cell" Text="{Binding StateText}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
+                  <TextBlock Classes="footnote" Margin="0,4,0,0" TextWrapping="Wrap"
+                             Text="Each part is its own range request. The file is reserved at full size and every part writes straight into its own place." />
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="History">
+              <ScrollViewer Margin="6,10,6,6" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding History}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:DownloadEventViewModel">
+                      <Grid ColumnDefinitions="66,16,*" Margin="0,0,0,9">
+                        <TextBlock Classes="cell" Text="{Binding TimeText}" />
+                        <Border Grid.Column="1" Width="7" Height="7" CornerRadius="4"
+                                HorizontalAlignment="Left" VerticalAlignment="Center"
+                                Background="{Binding Marker}" />
+                        <TextBlock Grid.Column="2" Classes="fieldValue" Text="{Binding Text}"
+                                   TextWrapping="Wrap" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </TabItem>
+          </TabControl>
+          </Panel>
+        </Panel>
       </Border>
 
-      <ScrollViewer Grid.Row="1"
-                    IsVisible="{Binding HasDownloads}"
-                    HorizontalScrollBarVisibility="Disabled"
-                    VerticalScrollBarVisibility="Auto">
-        <ItemsControl ItemsSource="{Binding Downloads}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:DownloadItemViewModel">
-              <Border Classes="card" Margin="0,0,0,12" Padding="22,18">
-                <StackPanel Spacing="13">
-
-                  <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto">
-                    <TextBlock Classes="fileName" Text="{Binding FileName}" VerticalAlignment="Center" />
-
-                    <TextBlock Grid.Column="1"
-                               Text="{Binding PercentageText}"
-                               Margin="14,0,0,0"
-                               FontSize="19"
-                               FontWeight="SemiBold"
-                               VerticalAlignment="Center"
-                               IsVisible="{Binding ShowsProgress}"
-                               Foreground="{StaticResource BrandGradientBrush}" />
-
-                    <Button Grid.Column="2"
-                            Classes="iconGhost"
-                            Margin="10,0,0,0"
-                            Content="❚❚"
-                            ToolTip.Tip="Pause — keeps what has already been downloaded"
-                            Command="{Binding PauseCommand}"
-                            IsVisible="{Binding IsActive}" />
-
-                    <Button Grid.Column="3"
-                            Classes="iconGhost"
-                            Margin="10,0,0,0"
-                            Content="▶"
-                            ToolTip.Tip="Resume from where it stopped"
-                            Command="{Binding ResumeCommand}"
-                            IsVisible="{Binding IsResumable}" />
-
-                    <Button Grid.Column="4"
-                            Classes="iconDanger"
-                            Margin="8,0,0,0"
-                            Content="✕"
-                            ToolTip.Tip="Cancel and delete what has been downloaded"
-                            Command="{Binding CancelCommand}" />
-                  </Grid>
-
-                  <ProgressBar Classes="brand"
-                               Minimum="0"
-                               Maximum="100"
-                               Value="{Binding Percentage}"
-                               IsIndeterminate="{Binding IsIndeterminate}"
-                               IsVisible="{Binding ShowsProgress}" />
-
-                  <Grid ColumnDefinitions="*,Auto,Auto,Auto">
-                    <TextBlock Classes="metric" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
-
-                    <TextBlock Grid.Column="1"
-                               Classes="metric"
-                               Margin="16,0,0,0"
-                               Text="{Binding SpeedText}"
-                               Foreground="{StaticResource BrandSkyBrush}" />
-
-                    <TextBlock Grid.Column="2"
-                               Classes="metric"
-                               Margin="16,0,0,0"
-                               Text="{Binding ConnectionsText}"
-                               Foreground="{StaticResource TextMutedBrush}" />
-
-                    <TextBlock Grid.Column="3"
-                               Classes="metric"
-                               Margin="16,0,0,0"
-                               Text="{Binding RemainingText}" />
-                  </Grid>
-
-                  <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsCompleted}">
-                    <Border Width="7" Height="7" CornerRadius="4" VerticalAlignment="Center"
-                            Background="{StaticResource SuccessBrush}" />
-                    <TextBlock Text="Complete" FontSize="12.5" FontWeight="SemiBold"
-                               Foreground="{StaticResource SuccessBrush}" />
-                  </StackPanel>
-
-                </StackPanel>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-      </ScrollViewer>
-
+      <!-- Status bar -->
+      <Grid Grid.Row="5" ColumnDefinitions="Auto,Auto,Auto,*,Auto" Height="30" Margin="16,0,16,0">
+        <Border Grid.ColumnSpan="5" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="0,1,0,0" />
+        <TextBlock Classes="cell" Text="{Binding TotalsText}" />
+        <Border Grid.Column="1" Width="1" Height="11" Margin="14,0" VerticalAlignment="Center"
+                Background="{StaticResource StrokeBrush}" />
+        <TextBlock Grid.Column="2" Classes="cell" Text="{Binding TotalSpeedText}"
+                   Foreground="{StaticResource BrandSkyBrush}" />
+        <TextBlock Grid.Column="4" Classes="cell" Text="{Binding DownloadFolderText}"
+                   TextTrimming="CharacterEllipsis" />
+      </Grid>
     </Grid>
-
-    <!-- Footer -->
-    <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Margin="0,20,0,0">
-      <TextBlock Classes="footnote" Text="WINDOWS-FIRST · PORTABLE ARCHITECTURE" LetterSpacing="1.2" />
-      <TextBlock Grid.Column="1" Classes="footnote" Text="Transfers are remembered between sessions" />
-    </Grid>
-
   </Grid>
 </Window>

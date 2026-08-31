@@ -1,5 +1,7 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
+using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -38,6 +40,9 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private long _lastBytes;
     private long _lastTimestamp;
     private double _bytesPerSecond;
+
+    /// <summary>Exposed so the status bar can add every row up.</summary>
+    public double BytesPerSecond => _bytesPerSecond;
     private bool _pauseRequested;
     private bool _disposed;
 
@@ -57,6 +62,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [NotifyPropertyChangedFor(nameof(IsPaused))]
     [NotifyPropertyChangedFor(nameof(IsResumable))]
     [NotifyPropertyChangedFor(nameof(ShowsProgress))]
+    [NotifyPropertyChangedFor(nameof(StatusText))]
     [NotifyCanExecuteChangedFor(nameof(CancelCommand))]
     [NotifyCanExecuteChangedFor(nameof(PauseCommand))]
     [NotifyCanExecuteChangedFor(nameof(ResumeCommand))]
@@ -80,11 +86,33 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     /// <summary>Shown when the transfer is split, so the speed figure is explicable.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StatusText))]
     private string _connectionsText = string.Empty;
 
     /// <summary>Documents, Video, Programs — what the file was sorted as.</summary>
     [ObservableProperty]
     private string _categoryName = string.Empty;
+
+    [ObservableProperty]
+    private IBrush _categoryBrush = new SolidColorBrush(Color.Parse("#64798F"));
+
+    [ObservableProperty]
+    private string _mediaTypeText = "Not reported";
+
+    [ObservableProperty]
+    private string _sizeText = string.Empty;
+
+    [ObservableProperty]
+    private string _validatorText = string.Empty;
+
+    [ObservableProperty]
+    private string _resumeText = string.Empty;
+
+    /// <summary>One row per connection, updated in place so the bars do not flicker.</summary>
+    public ObservableCollection<SegmentViewModel> Segments { get; } = [];
+
+    /// <summary>What happened to this transfer, newest last.</summary>
+    public ObservableCollection<DownloadEventViewModel> History { get; } = [];
 
     private DownloadItemViewModel(
         IDownloadScheduler scheduler,
@@ -142,6 +170,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             _mediaType = job.MediaType,
             _category = job.Category,
             CategoryName = FileCategories.FolderNameFor(job.Category),
+            CategoryBrush = new SolidColorBrush(Color.Parse(CategoryColours.HexFor(job.Category))),
             IsIndeterminate = false,
         };
 
@@ -187,6 +216,18 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     public string PercentageText => Percentage.ToString("0", CultureInfo.CurrentCulture) + "%";
 
+    /// <summary>One word for the table's status column, where the long detail will not fit.</summary>
+    public string StatusText => Status switch
+    {
+        DownloadStatus.Pending => "Queued",
+        DownloadStatus.Running => string.IsNullOrEmpty(ConnectionsText) ? "Downloading" : ConnectionsText,
+        DownloadStatus.Paused => "Paused",
+        DownloadStatus.Completed => "Complete",
+        DownloadStatus.Failed => "Failed",
+        DownloadStatus.Cancelled => "Cancelled",
+        _ => Status.ToString(),
+    };
+
     /// <summary>Runs the transfer to completion. Never throws: failures become status.</summary>
     public async Task RunAsync()
     {
@@ -195,6 +236,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         DownloadCallbacks callbacks = new()
         {
             Progress = new Progress<DownloadProgress>(OnProgress),
+            Segments = new Progress<IReadOnlyList<SegmentProgress>>(OnSegments),
             Planned = OnPlanned,
             Retrying = OnRetry,
             Started = OnStarted,
@@ -212,6 +254,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             _mediaType = result.MediaType ?? _mediaType;
             _category = result.Category;
             CategoryName = FileCategories.FolderNameFor(result.Category);
+            CategoryBrush = new SolidColorBrush(Color.Parse(CategoryColours.HexFor(result.Category)));
             Percentage = 100;
             IsIndeterminate = false;
             SpeedText = string.Empty;
@@ -357,6 +400,17 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         _mediaType = plan.MediaType;
         _category = plan.Category;
         CategoryName = FileCategories.FolderNameFor(plan.Category);
+        CategoryBrush = new SolidColorBrush(Color.Parse(CategoryColours.HexFor(plan.Category)));
+        MediaTypeText = string.IsNullOrWhiteSpace(plan.MediaType) ? "Not reported" : plan.MediaType;
+        SizeText = plan.TotalBytes is { } size ? FormatBytes(size) : "Unknown";
+        ResumeText = plan.ServerSupportsResume ? "Yes — server accepts ranges" : "No — cannot be resumed";
+
+        Record(
+            DownloadEventKind.Information,
+            plan.SegmentCount > 1
+                ? $"Started across {plan.SegmentCount} connections · {SizeText}"
+                : $"Started on one connection · {SizeText}");
+
         _totalBytes = plan.TotalBytes;
         _bytesReceived = plan.ResumedFrom;
         PauseCommand.NotifyCanExecuteChanged();
@@ -374,6 +428,31 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         // leaves a partial file that no row knows how to claim.
         Persist();
     }
+
+    private void OnSegments(IReadOnlyList<SegmentProgress> segments)
+    {
+        // Updated in place rather than rebuilt: replacing the collection every 100 ms
+        // would make the bars flicker and lose the scroll position.
+        for (int index = 0; index < segments.Count; index++)
+        {
+            if (index < Segments.Count)
+            {
+                Segments[index].Update(segments[index]);
+            }
+            else
+            {
+                Segments.Add(new SegmentViewModel(segments[index]));
+            }
+        }
+
+        while (Segments.Count > segments.Count)
+        {
+            Segments.RemoveAt(Segments.Count - 1);
+        }
+    }
+
+    private void Record(DownloadEventKind kind, string text) =>
+        History.Add(new DownloadEventViewModel(new DownloadEvent(DateTimeOffset.Now, kind, text)));
 
     private void OnRetry(DownloadRetry retry)
     {
@@ -442,6 +521,21 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         SpeedText = string.Empty;
         RemainingText = string.Empty;
         _bytesPerSecond = 0;
+
+        Record(
+            status switch
+            {
+                DownloadStatus.Completed => DownloadEventKind.Success,
+                DownloadStatus.Failed => DownloadEventKind.Warning,
+                _ => DownloadEventKind.Information,
+            },
+            status switch
+            {
+                DownloadStatus.Completed => "Finished",
+                DownloadStatus.Paused => "Paused — partial file kept",
+                DownloadStatus.Cancelled => "Cancelled — partial file deleted",
+                _ => detail,
+            });
 
         Persist();
     }

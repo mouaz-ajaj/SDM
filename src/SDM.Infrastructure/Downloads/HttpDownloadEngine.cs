@@ -260,7 +260,8 @@ public sealed class HttpDownloadEngine : IDownloadEngine
 
         PartialFile.Write(partialPath, metadata with { Segments = segments });
 
-        SegmentedTransfer transfer = new(segments, partialPath, metadata, totalBytes, callbacks?.Progress);
+        SegmentedTransfer transfer = new(
+            segments, partialPath, metadata, totalBytes, callbacks?.Progress, callbacks?.Segments);
 
         try
         {
@@ -325,6 +326,14 @@ public sealed class HttpDownloadEngine : IDownloadEngine
                 if (!hasReported || sinceLastReport.Elapsed >= ProgressInterval)
                 {
                     callbacks?.Progress?.Report(new DownloadProgress(bytesWritten, totalBytes));
+
+                    // One connection is still one segment. Reporting it the same way keeps
+                    // the interface from needing a special case for unsplit transfers.
+                    callbacks?.Segments?.Report(
+                    [
+                        new SegmentProgress(1, 0, (totalBytes ?? bytesWritten) - 1, bytesWritten),
+                    ]);
+
                     hasReported = true;
                     sinceLastReport.Restart();
                 }

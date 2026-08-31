@@ -18,11 +18,15 @@ public sealed class JsonUserSettingsStore : IUserSettingsStore
 
     private readonly ILogger<JsonUserSettingsStore> _logger;
 
-    public JsonUserSettingsStore(ILogger<JsonUserSettingsStore> logger)
+    /// <param name="path">
+    /// Where to write. Null uses the per-user location; tests pass a temporary path so
+    /// they never fight each other over the one real file.
+    /// </param>
+    public JsonUserSettingsStore(ILogger<JsonUserSettingsStore> logger, string? path = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
-        Path = SdmPaths.UserSettingsPath;
+        Path = path ?? SdmPaths.UserSettingsPath;
     }
 
     public string Path { get; }
@@ -31,7 +35,8 @@ public sealed class JsonUserSettingsStore : IUserSettingsStore
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        SdmPaths.EnsureUserDataDirectory();
+        System.IO.Directory.CreateDirectory(
+            System.IO.Path.GetDirectoryName(Path) ?? SdmPaths.EnsureUserDataDirectory());
 
         JsonObject root = await ReadExistingAsync(cancellationToken);
         JsonObject downloads = root[DownloadsSection] as JsonObject ?? [];

@@ -13,9 +13,13 @@ public static class SdmBootstrapper
 {
     private const string UserSettingsFileName = SdmPaths.UserSettingsFileName;
 
-    public static ServiceProvider CreateServiceProvider(string? basePath = null)
+    /// <param name="userSettingsDirectory">
+    /// Where the user's own settings file lives. Null uses the per-user location.
+    /// </param>
+    public static ServiceProvider CreateServiceProvider(
+        string? basePath = null, string? userSettingsDirectory = null)
     {
-        IConfiguration configuration = BuildConfiguration(basePath);
+        IConfiguration configuration = BuildConfiguration(basePath, userSettingsDirectory);
         ServiceCollection services = new();
 
         services.AddSingleton(configuration);
@@ -49,7 +53,7 @@ public static class SdmBootstrapper
     /// <summary>The user's own settings file, which survives reinstalling and rebuilding.</summary>
     public static string UserSettingsPath => SdmPaths.UserSettingsPath;
 
-    private static IConfiguration BuildConfiguration(string? basePath)
+    private static IConfiguration BuildConfiguration(string? basePath, string? userSettingsDirectory)
     {
         string contentRoot = basePath ?? AppContext.BaseDirectory;
 
@@ -61,7 +65,7 @@ public static class SdmBootstrapper
             // is replaced by every build and every update, so a preference written there
             // would quietly disappear. Only the keys the user changed need be present.
             .AddJsonFile(
-                new PhysicalFileProvider(EnsureUserSettingsDirectory()),
+                new PhysicalFileProvider(userSettingsDirectory ?? EnsureUserSettingsDirectory()),
                 UserSettingsFileName,
                 optional: true,
 

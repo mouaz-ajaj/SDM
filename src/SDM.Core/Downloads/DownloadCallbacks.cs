@@ -9,6 +9,9 @@ public sealed record DownloadCallbacks
     /// <summary>Bytes transferred so far.</summary>
     public IProgress<DownloadProgress>? Progress { get; init; }
 
+    /// <summary>Per-connection progress for a split transfer, throttled like Progress.</summary>
+    public IProgress<IReadOnlyList<SegmentProgress>>? Segments { get; init; }
+
     /// <summary>Fires once the destination and size are known, before any byte is written.</summary>
     public Action<DownloadPlan>? Planned { get; init; }
 

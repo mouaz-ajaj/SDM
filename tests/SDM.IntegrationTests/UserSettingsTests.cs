@@ -6,8 +6,13 @@ using SDM.Desktop;
 
 namespace SDM.IntegrationTests;
 
-public sealed class UserSettingsTests
+public sealed class UserSettingsTests : IDisposable
 {
+    private readonly string _shipped = Directory.CreateTempSubdirectory("sdm-shipped-").FullName;
+    private readonly string _user = Directory.CreateTempSubdirectory("sdm-user-").FullName;
+
+    public UserSettingsTests() => WriteShipped();
+
     [Fact]
     public void UserSettingsPath_LivesOutsideTheInstallation()
     {
@@ -23,27 +28,53 @@ public sealed class UserSettingsTests
     [Fact]
     public void UserSettings_OverrideTheShippedDefaults()
     {
-        string directory = Directory.CreateTempSubdirectory("sdm-settings-").FullName;
+        // Only the one key the user changed; everything else must still come from the
+        // shipped file.
+        File.WriteAllText(
+            Path.Combine(_user, "settings.json"),
+            """{"Downloads":{"AskWhereToSave":true}}""");
 
-        try
-        {
-            // Only the one key the user changed; everything else must still come from
-            // the shipped appsettings.json.
-            File.WriteAllText(
-                Path.Combine(directory, "appsettings.json"),
-                JsonSerializer.Serialize(new
+        DownloadOptions options = Build();
+
+        Assert.True(options.AskWhereToSave);
+        Assert.Equal(3, options.MaximumConcurrent);
+        Assert.Equal(6, options.MaximumConnectionsPerHost);
+    }
+
+    [Fact]
+    public void ShippedDefaults_ApplyWhenTheUserHasNoSettingsFile()
+    {
+        DownloadOptions options = Build();
+
+        Assert.False(options.AskWhereToSave);
+        Assert.Equal(3, options.MaximumConcurrent);
+    }
+
+    private DownloadOptions Build()
+    {
+        using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider(_shipped, _user);
+        return provider.GetRequiredService<IOptionsMonitor<DownloadOptions>>().CurrentValue;
+    }
+
+    private void WriteShipped() =>
+        File.WriteAllText(
+            Path.Combine(_shipped, "appsettings.json"),
+            JsonSerializer.Serialize(new
+            {
+                Application = new { Name = "SDM", FullName = "Speed Download Manager" },
+                Downloads = new
                 {
-                    Application = new { Name = "SDM", FullName = "Speed Download Manager" },
-                    Downloads = new { AskWhereToSave = true },
-                }));
+                    MaximumConcurrent = 3,
+                    MaximumPerHost = 2,
+                    MaximumConnectionsPerHost = 6,
+                    MaximumSegments = 4,
+                    AskWhereToSave = false,
+                },
+            }));
 
-            using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider(directory);
-            DownloadOptions options = provider.GetRequiredService<IOptions<DownloadOptions>>().Value;
-
-            Assert.True(options.AskWhereToSave);
-            Assert.Equal(3, options.MaximumConcurrent);
-        }
-        finally
+    public void Dispose()
+    {
+        foreach (string directory in new[] { _shipped, _user })
         {
             try
             {

@@ -269,11 +269,25 @@ main view being rebuilt, and the user asked for them first.
 - Saving one value leaves a hand-written section in the same file untouched.
 - The save dialog shows the real name for a URL that ends in an opaque id.
 
-### Phase 3.8 — The console shell (planned)
+### Phase 3.8 — The console shell — DONE
 
-The chosen design: sidebar with filters and categories, a real table, and a detail
-panel with Details, Connections and History tabs. Needs per-segment progress surfaced
-from the engine, which currently reports one aggregate number.
+The chosen design, built: a sidebar of status filters and categories with live counts, a
+real table, and a detail panel with Details, Connections and History tabs.
+
+**Scope**
+- The engine now reports per-connection progress alongside the total. An unsplit
+  transfer reports one segment, so the interface needs no special case for it.
+- The detail panel sits at the bottom rather than the right: 960 px minus a sidebar
+  minus a right panel leaves too little for a seven-column table, and the table is the
+  point of this design. Across the bottom the details get three columns instead of one.
+- Status and category are two ways of narrowing the same list, so choosing one clears
+  the other rather than combining into an empty result.
+- Each row keeps its own history, appended at the transitions that already exist.
+
+**Acceptance**
+- Nine rows visible at once; the sidebar counts follow status changes without polling.
+- The Connections tab shows one bar per part with its byte range.
+- Selecting a row keeps its selection while other rows change status.
 
 ### Phase 3.9 — Browser-facing settings (planned)
 
