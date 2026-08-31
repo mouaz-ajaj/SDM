@@ -37,7 +37,7 @@ Pin the SDK to the version actually installed and make CI match it.
 
 **Acceptance:** `dotnet build SDM.sln -c Release` succeeds with no workaround.
 
-### Phase 2.1 — HTTP download engine (headless)
+### Phase 2.1 — HTTP download engine (headless) — DONE
 
 **Goal:** download a file over HTTP(S) to disk, with progress, cancellable. No UI.
 
