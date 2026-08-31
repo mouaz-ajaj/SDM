@@ -43,7 +43,6 @@ public sealed partial class SaveDownloadViewModel : ObservableObject
         MediaTypeText = string.IsNullOrWhiteSpace(probe.MediaType) ? "Not reported" : probe.MediaType;
         CategoryText = FileCategories.FolderNameFor(probe.Category);
         ResumeText = probe.SupportsResume ? "Yes — can be paused and resumed" : "No — cannot be resumed";
-        CanResume = probe.SupportsResume;
     }
 
     public string Address { get; }
@@ -55,8 +54,6 @@ public sealed partial class SaveDownloadViewModel : ObservableObject
     public string CategoryText { get; }
 
     public string ResumeText { get; }
-
-    public bool CanResume { get; }
 
     /// <summary>Set when the dialog closes; null means the user chose not to download.</summary>
     public DownloadDestination? Result { get; private set; }

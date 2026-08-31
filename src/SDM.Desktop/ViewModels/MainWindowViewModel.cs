@@ -272,6 +272,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // resumed the next time the application starts.
         await Task.WhenAll(All.Select(download => download.StopAndWaitAsync(keepPartialFile: true)));
 
+        // Rows that were already finished still hold unwritten state if their last save
+        // was still in flight, so every row is flushed, not only the running ones.
+        await Task.WhenAll(All.Select(download => download.FlushAsync()));
+
         foreach (DownloadItemViewModel download in All)
         {
             download.Dispose();

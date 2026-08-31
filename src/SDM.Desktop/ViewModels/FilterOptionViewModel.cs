@@ -8,9 +8,6 @@ public sealed partial class FilterOptionViewModel : ObservableObject
     [ObservableProperty]
     private int _count;
 
-    [ObservableProperty]
-    private bool _isSelected;
-
     public FilterOptionViewModel(TransferFilter filter)
     {
         Filter = filter;

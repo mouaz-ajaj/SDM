@@ -103,9 +103,6 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private string _sizeText = string.Empty;
 
     [ObservableProperty]
-    private string _validatorText = string.Empty;
-
-    [ObservableProperty]
     private string _resumeText = string.Empty;
 
     /// <summary>One row per connection, updated in place so the bars do not flicker.</summary>
@@ -311,7 +308,15 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         {
             await Task.Delay(20);
         }
+
+        // Persist() runs detached everywhere else so it never blocks a transfer, but the
+        // process is about to exit: this last write has to be waited for or the row's
+        // final state is lost in the race.
+        await FlushAsync();
     }
+
+    /// <summary>Writes the row's current state and waits for it.</summary>
+    public Task FlushAsync() => SaveAsync(Snapshot());
 
     /// <summary>Removes the partial file for a row the user is throwing away.</summary>
     public void DiscardPartial()
@@ -542,7 +547,14 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     private void Persist()
     {
-        DownloadJob job = new()
+        // Saving must never take the window down or block the transfer, so it runs
+        // detached and reports failures to the log instead.
+        _ = SaveAsync(Snapshot());
+    }
+
+    private DownloadJob Snapshot()
+    {
+        return new DownloadJob
         {
             Id = _id,
             Address = _address,
@@ -556,10 +568,6 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             CreatedAt = _createdAt,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
-
-        // Saving must never take the window down or block the transfer, so it runs
-        // detached and reports failures to the log instead.
-        _ = SaveAsync(job);
     }
 
     private async Task SaveAsync(DownloadJob job)

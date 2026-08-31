@@ -46,9 +46,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string? _statusMessage;
 
-    [ObservableProperty]
-    private bool _isSaved;
-
     public SettingsViewModel(
         IUserSettingsStore store,
         IFolderPicker folderPicker,
@@ -80,6 +77,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// applies to the next download.
     /// </summary>
     public static string RestartNote => "Connection limits apply the next time SDM starts.";
+
+    private bool IsSystemDefaultFolder =>
+        string.Equals(
+            System.IO.Path.TrimEndingDirectorySeparator(DownloadFolder.Trim()),
+            System.IO.Path.TrimEndingDirectorySeparator(_defaultFolder.GetPath()),
+            StringComparison.OrdinalIgnoreCase);
 
     private void Load()
     {
@@ -114,7 +117,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     private async Task SaveAsync()
     {
         StatusMessage = null;
-        IsSaved = false;
 
         if (!Validate(out string? problem))
         {
@@ -126,7 +128,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             await _store.SaveAsync(new UserSettings
             {
-                DownloadFolder = DownloadFolder.Trim(),
+                // An unchanged folder is saved as empty rather than as the path it happens
+                // to resolve to today. Writing the absolute path would silently pin the
+                // folder, so a moved user profile would stop being followed.
+                DownloadFolder = IsSystemDefaultFolder ? string.Empty : DownloadFolder.Trim(),
                 OrganizeIntoCategoryFolders = OrganizeIntoCategoryFolders,
                 AskWhereToSave = AskWhereToSave,
                 MaximumConcurrent = MaximumConcurrent,
@@ -137,7 +142,6 @@ public sealed partial class SettingsViewModel : ObservableObject
                 IdleTimeoutSeconds = IdleTimeoutSeconds,
             });
 
-            IsSaved = true;
             StatusMessage = "Saved.";
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -163,7 +167,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         IdleTimeoutSeconds = defaults.IdleTimeoutSeconds;
 
         StatusMessage = "Defaults restored — not saved yet.";
-        IsSaved = false;
     }
 
     /// <summary>
