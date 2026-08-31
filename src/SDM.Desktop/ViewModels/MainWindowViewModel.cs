@@ -1,59 +1,36 @@
-using System.Globalization;
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Microsoft.Extensions.Logging;
 using SDM.Application.ApplicationInfo;
 using SDM.Application.Downloads;
-using SDM.Core.Downloads;
 
 namespace SDM.Desktop.ViewModels;
 
 public sealed partial class MainWindowViewModel : ObservableObject
 {
-    private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
-
     private readonly IApplicationInfoService _applicationInfo;
-    private readonly IStartDownloadUseCase _startDownload;
-    private readonly ILogger<MainWindowViewModel> _logger;
+    private readonly IDownloadScheduler _scheduler;
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(DownloadCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AddCommand))]
     private string _address = string.Empty;
-
-    [ObservableProperty]
-    private double _percentage;
-
-    [ObservableProperty]
-    private bool _isIndeterminate;
-
-    [ObservableProperty]
-    private bool _hasTransfer;
-
-    [ObservableProperty]
-    private bool _isComplete;
-
-    [ObservableProperty]
-    private string _fileName = string.Empty;
-
-    [ObservableProperty]
-    private string _transferSummary = string.Empty;
 
     [ObservableProperty]
     private string? _errorMessage;
 
-    public MainWindowViewModel(
-        IApplicationInfoService applicationInfo,
-        IStartDownloadUseCase startDownload,
-        ILogger<MainWindowViewModel> logger)
+    public MainWindowViewModel(IApplicationInfoService applicationInfo, IDownloadScheduler scheduler)
     {
         ArgumentNullException.ThrowIfNull(applicationInfo);
-        ArgumentNullException.ThrowIfNull(startDownload);
-        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(scheduler);
 
         _applicationInfo = applicationInfo;
-        _startDownload = startDownload;
-        _logger = logger;
+        _scheduler = scheduler;
+
+        Downloads.CollectionChanged += OnDownloadsChanged;
     }
+
+    public ObservableCollection<DownloadItemViewModel> Downloads { get; } = [];
 
     public string Name => _applicationInfo.Name;
 
@@ -61,111 +38,62 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public string Version => $"v{_applicationInfo.Version}";
 
-    public string PercentageText => Percentage.ToString("0", CultureInfo.CurrentCulture) + "%";
+    public bool HasDownloads => Downloads.Count > 0;
 
-    private bool CanDownload => !string.IsNullOrWhiteSpace(Address);
+    public bool HasActiveDownloads => Downloads.Any(download => download.IsActive);
 
-    [RelayCommand(CanExecute = nameof(CanDownload))]
-    private async Task DownloadAsync(CancellationToken cancellationToken)
+    private bool CanAdd => !string.IsNullOrWhiteSpace(Address);
+
+    [RelayCommand(CanExecute = nameof(CanAdd))]
+    private void Add()
     {
-        string requested = Address.Trim();
+        string address = Address.Trim();
+
+        if (!Uri.TryCreate(address, UriKind.Absolute, out Uri? source)
+            || (source.Scheme != Uri.UriSchemeHttp && source.Scheme != Uri.UriSchemeHttps))
+        {
+            ErrorMessage = "Enter a complete http:// or https:// address.";
+            return;
+        }
 
         ErrorMessage = null;
-        HasTransfer = true;
-        IsComplete = false;
-        IsIndeterminate = true;
-        Percentage = 0;
-        FileName = PreviewFileName(requested);
-        TransferSummary = "Connecting…";
+        Address = string.Empty;
 
-        // Progress<T> captures this thread's synchronization context, so reports arrive
-        // back on the UI thread and these property writes are safe.
-        Progress<DownloadProgress> progress = new(OnProgress);
+        DownloadItemViewModel item = new(_scheduler, address);
+        Downloads.Insert(0, item);
 
-        try
-        {
-            DownloadResult result = await _startDownload.ExecuteAsync(requested, progress, cancellationToken);
-
-            FileName = Path.GetFileName(result.DestinationPath);
-            TransferSummary = $"{FormatBytes(result.BytesWritten)} · saved to {Path.GetDirectoryName(result.DestinationPath)}";
-            Percentage = 100;
-            IsIndeterminate = false;
-            IsComplete = true;
-            Address = string.Empty;
-        }
-        catch (OperationCanceledException)
-        {
-            HasTransfer = false;
-        }
-        catch (ArgumentException exception)
-        {
-            Fail(exception.Message);
-        }
-        catch (HttpRequestException exception)
-        {
-            Fail(exception.StatusCode is { } status
-                ? $"The server answered {(int)status} {status}."
-                : "Could not reach the server. Check the address and your connection.");
-        }
-        catch (IOException exception)
-        {
-            Fail($"Could not write the file: {exception.Message}");
-        }
-        catch (UnauthorizedAccessException)
-        {
-            Fail("Access to the download folder was denied.");
-        }
-        catch (Exception exception)
-        {
-            // A command handler is the last line of defence: an unhandled exception here
-            // would take the whole window down.
-            _logger.LogError(exception, "Unexpected failure downloading {Address}.", requested);
-            Fail("The download failed unexpectedly. See the log for details.");
-        }
+        // RunAsync never throws — it turns every failure into the row's own status — so
+        // there is no unobserved task to await here.
+        _ = item.RunAsync();
     }
 
-    private void OnProgress(DownloadProgress progress)
+    [RelayCommand]
+    private void ClearFinished()
     {
-        IsIndeterminate = progress.TotalBytes is null;
-        Percentage = progress.Percentage ?? 0;
-
-        TransferSummary = progress.TotalBytes is { } total
-            ? $"{FormatBytes(progress.BytesReceived)} of {FormatBytes(total)}"
-            : $"{FormatBytes(progress.BytesReceived)} · size unknown";
-    }
-
-    private void Fail(string message)
-    {
-        ErrorMessage = message;
-        HasTransfer = false;
-        IsIndeterminate = false;
-        Percentage = 0;
+        foreach (DownloadItemViewModel finished in Downloads.Where(d => !d.IsActive).ToList())
+        {
+            Downloads.Remove(finished);
+            finished.Dispose();
+        }
     }
 
     /// <summary>
-    /// A provisional name to show while connecting. The engine settles the real one from
-    /// the response headers, and it replaces this once the transfer finishes.
+    /// Cancels every running transfer and waits for their partial files to be removed.
+    /// Called while the window is closing, before the process is allowed to exit.
     /// </summary>
-    private static string PreviewFileName(string address) =>
-        Uri.TryCreate(address, UriKind.Absolute, out Uri? source)
-            ? SafeFileName.FromUri(source)
-            : SafeFileName.Fallback;
-
-    private static string FormatBytes(long bytes)
+    public async Task ShutdownAsync()
     {
-        double value = bytes;
-        int unit = 0;
+        await Task.WhenAll(Downloads.Select(download => download.CancelAndWaitAsync()));
 
-        while (value >= 1024 && unit < ByteUnits.Length - 1)
+        foreach (DownloadItemViewModel download in Downloads)
         {
-            value /= 1024;
-            unit++;
+            download.Dispose();
         }
-
-        return string.Create(
-            CultureInfo.CurrentCulture,
-            $"{value:0.#} {ByteUnits[unit]}");
     }
 
-    partial void OnPercentageChanged(double value) => OnPropertyChanged(nameof(PercentageText));
+    private void OnDownloadsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        OnPropertyChanged(nameof(HasDownloads));
+        OnPropertyChanged(nameof(HasActiveDownloads));
+    }
 }

@@ -18,8 +18,15 @@ public static class DependencyInjection
             .Validate(options => !string.IsNullOrWhiteSpace(options.FullName), "Application full name is required.")
             .ValidateOnStart();
 
+        services.AddOptions<DownloadOptions>()
+            .Bind(configuration.GetSection(DownloadOptions.SectionName))
+            .Validate(options => options.MaximumConcurrent is > 0 and <= 16,
+                "Downloads:MaximumConcurrent must be between 1 and 16.")
+            .ValidateOnStart();
+
         services.AddSingleton<IApplicationInfoService, ApplicationInfoService>();
         services.AddSingleton<IStartDownloadUseCase, StartDownloadUseCase>();
+        services.AddSingleton<IDownloadScheduler, DownloadScheduler>();
         return services;
     }
 }
