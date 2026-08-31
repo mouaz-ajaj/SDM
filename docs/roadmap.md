@@ -109,6 +109,31 @@ meaningless last segment, and the archive passed an integrity check.
 - Speed and ETA update at least once per second and are plausible.
 - Closing the window cancels in-flight downloads cleanly with no orphaned files.
 
+### Phase 2.4 — Survive a hostile server — DONE
+
+Added after a real run: three transfers aimed at one speed-test host earned
+`429 Too Many Requests`, and SDM gave up permanently on a failure that means
+"come back later".
+
+**Scope**
+- Per-host concurrency alongside the global limit. Servers cap connections per
+  client, so a global limit alone cannot prevent a 429.
+- `DownloadFailedException` carrying the status code, `Retry-After`, and whether
+  the failure is worth retrying.
+- Retry with exponential backoff and jitter, honouring `Retry-After` up to a cap.
+- An idle timeout, since `HttpClient.Timeout` is disabled and a silent server
+  would otherwise hang a transfer for ever.
+
+**Retry only applies while nothing has been transferred.** Until Phase 3.1 can
+resume, retrying after 900 MB would discard those 900 MB and start again. Once
+resume exists, this restriction should be lifted.
+
+**Acceptance**
+- A 429 with `Retry-After: 5` waits five seconds and retries; a 404 does not.
+- Five transfers to one host never exceed the per-host limit; three transfers to
+  three different hosts all run at once.
+- A server that sends headers then goes silent fails on the idle clock.
+
 ---
 
 ## Track B — Make it reliable (3 sessions)
@@ -118,6 +143,8 @@ meaningless last segment, and the archive passed an integrity check.
 **Scope**
 - Probe `Accept-Ranges`; download into a `.part` file; on resume send
   `Range: bytes=<existing length>-` and append.
+- Lift the "no bytes transferred" restriction on retry from Phase 2.4: a retry can
+  now resume instead of restarting.
 - Pause button alongside cancel. Pause keeps the `.part`; cancel deletes it.
 - Servers that do not support `Range`: fall back to restart, and say so in the UI.
 

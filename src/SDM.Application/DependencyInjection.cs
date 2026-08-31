@@ -22,6 +22,16 @@ public static class DependencyInjection
             .Bind(configuration.GetSection(DownloadOptions.SectionName))
             .Validate(options => options.MaximumConcurrent is > 0 and <= 16,
                 "Downloads:MaximumConcurrent must be between 1 and 16.")
+            .Validate(options => options.MaximumPerHost is > 0 and <= 16,
+                "Downloads:MaximumPerHost must be between 1 and 16.")
+            .Validate(options => options.MaximumPerHost <= options.MaximumConcurrent,
+                "Downloads:MaximumPerHost cannot exceed Downloads:MaximumConcurrent.")
+            .Validate(options => options.MaximumAttempts is > 0 and <= 10,
+                "Downloads:MaximumAttempts must be between 1 and 10.")
+            .Validate(options => options.IdleTimeoutSeconds is >= 5 and <= 3600,
+                "Downloads:IdleTimeoutSeconds must be between 5 and 3600.")
+            .Validate(options => options.MaximumRetryDelaySeconds is > 0 and <= 3600,
+                "Downloads:MaximumRetryDelaySeconds must be between 1 and 3600.")
             .ValidateOnStart();
 
         services.AddSingleton<IApplicationInfoService, ApplicationInfoService>();

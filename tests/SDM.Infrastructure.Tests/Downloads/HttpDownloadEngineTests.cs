@@ -2,6 +2,8 @@ using System.Net;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using SDM.Application.Downloads;
 using SDM.Core.Downloads;
 
 namespace SDM.Infrastructure.Tests.Downloads;
@@ -84,12 +86,48 @@ public sealed class HttpDownloadEngineTests : IDisposable
         await using ServiceProvider provider = BuildProvider();
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
 
-        HttpRequestException exception = await Assert.ThrowsAsync<HttpRequestException>(
+        DownloadFailedException exception = await Assert.ThrowsAsync<DownloadFailedException>(
             () => engine.DownloadAsync(
                 new DownloadRequest(server.Url("missing.bin"), _workingDirectory),
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Equal(HttpStatusCode.NotFound, exception.StatusCode);
+        Assert.Equal(404, exception.StatusCode);
+        Assert.False(exception.IsTransient, "A 404 is permanent and must not be retried.");
+        Assert.Empty(Directory.GetFiles(_workingDirectory));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_MarksRateLimitingAsTransientAndCarriesRetryAfter()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadFailedException exception = await Assert.ThrowsAsync<DownloadFailedException>(
+            () => engine.DownloadAsync(
+                new DownloadRequest(server.Url("rate-limited"), _workingDirectory),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(429, exception.StatusCode);
+        Assert.True(exception.IsTransient, "429 means come back later, not give up.");
+        Assert.Equal(TimeSpan.FromSeconds(5), exception.RetryAfter);
+        Assert.Empty(Directory.GetFiles(_workingDirectory));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_FailsWhenTheServerGoesSilentMidTransfer()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(idleTimeoutSeconds: 1);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadFailedException exception = await Assert.ThrowsAsync<DownloadFailedException>(
+            () => engine.DownloadAsync(
+                new DownloadRequest(server.Url("stalls"), _workingDirectory),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.True(exception.IsTransient);
+        Assert.Contains("stopped sending data", exception.Message, StringComparison.Ordinal);
         Assert.Empty(Directory.GetFiles(_workingDirectory));
     }
 
@@ -178,10 +216,12 @@ public sealed class HttpDownloadEngineTests : IDisposable
         Assert.Equal(nested, Path.GetDirectoryName(result.DestinationPath));
     }
 
-    private static ServiceProvider BuildProvider()
+    private static ServiceProvider BuildProvider(int idleTimeoutSeconds = 60)
     {
         ServiceCollection services = new();
         services.AddLogging();
+        services.AddSingleton<IOptions<DownloadOptions>>(
+            Options.Create(new DownloadOptions { IdleTimeoutSeconds = idleTimeoutSeconds }));
         services.AddSdmInfrastructure();
         return services.BuildServiceProvider();
     }
@@ -215,6 +255,20 @@ public sealed class HttpDownloadEngineTests : IDisposable
                 context.Response.AddHeader("Content-Disposition", "attachment; filename=\"../../escaped.txt\"");
                 context.Response.ContentLength64 = _small.Length;
                 await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
+                break;
+
+            case "/rate-limited":
+                context.Response.StatusCode = (int)HttpStatusCode.TooManyRequests;
+                context.Response.AddHeader("Retry-After", "5");
+                break;
+
+            case "/stalls":
+                // Headers and a first chunk arrive, then the connection is held open
+                // saying nothing — the case an infinite HttpClient timeout cannot catch.
+                context.Response.ContentLength64 = _payload.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
+                await context.Response.OutputStream.FlushAsync(cancellationToken);
+                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
                 break;
 
             default:

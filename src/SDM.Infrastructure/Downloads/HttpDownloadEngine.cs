@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Net;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using SDM.Application.Downloads;
 using SDM.Core.Downloads;
 
 namespace SDM.Infrastructure.Downloads;
@@ -18,16 +21,35 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     private const int MaximumNameAttempts = 1000;
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>
+    /// Status codes that mean "not now" rather than "not ever". 500 is deliberately absent:
+    /// a generic server error is usually a real fault, and retrying it just adds load.
+    /// </summary>
+    private static readonly HashSet<HttpStatusCode> TransientStatusCodes =
+    [
+        HttpStatusCode.RequestTimeout,
+        HttpStatusCode.TooManyRequests,
+        HttpStatusCode.BadGateway,
+        HttpStatusCode.ServiceUnavailable,
+        HttpStatusCode.GatewayTimeout,
+    ];
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<HttpDownloadEngine> _logger;
+    private readonly TimeSpan _idleTimeout;
 
-    public HttpDownloadEngine(IHttpClientFactory httpClientFactory, ILogger<HttpDownloadEngine> logger)
+    public HttpDownloadEngine(
+        IHttpClientFactory httpClientFactory,
+        IOptions<DownloadOptions> options,
+        ILogger<HttpDownloadEngine> logger)
     {
         ArgumentNullException.ThrowIfNull(httpClientFactory);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _idleTimeout = TimeSpan.FromSeconds(options.Value.IdleTimeoutSeconds);
     }
 
     public async Task<DownloadResult> DownloadAsync(
@@ -37,12 +59,15 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        HttpClient client = _httpClientFactory.CreateClient(HttpClientName);
+        // One idle clock covers the whole transfer and is pushed forward on every chunk
+        // that arrives, so a server that goes silent fails instead of hanging for ever.
+        using CancellationTokenSource idle = new(_idleTimeout);
+        using CancellationTokenSource linked =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, idle.Token);
 
-        using HttpResponseMessage response = await client
-            .GetAsync(request.Source, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using HttpResponseMessage response = await SendAsync(request, linked.Token, cancellationToken);
 
-        response.EnsureSuccessStatusCode();
+        EnsureSuccess(response);
 
         Directory.CreateDirectory(request.DestinationDirectory);
 
@@ -61,7 +86,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         try
         {
             bytesWritten = await CopyToPartialFileAsync(
-                response, partialPath, totalBytes, progress, cancellationToken);
+                response, partialPath, totalBytes, progress, idle, linked.Token, cancellationToken);
 
             File.Move(partialPath, destination, overwrite: false);
         }
@@ -75,6 +100,49 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         _logger.LogInformation("Completed {Destination}; wrote {BytesWritten} bytes.", destination, bytesWritten);
 
         return new DownloadResult(destination, bytesWritten);
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(
+        DownloadRequest request,
+        CancellationToken linkedToken,
+        CancellationToken callerToken)
+    {
+        HttpClient client = _httpClientFactory.CreateClient(HttpClientName);
+
+        try
+        {
+            return await client.GetAsync(request.Source, HttpCompletionOption.ResponseHeadersRead, linkedToken);
+        }
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        {
+            throw new DownloadFailedException(
+                $"The server did not respond within {_idleTimeout.TotalSeconds:0} seconds.",
+                statusCode: null,
+                retryAfter: null,
+                isTransient: true);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new DownloadFailedException(
+                "Could not reach the server.", statusCode: null, retryAfter: null, isTransient: true, exception);
+        }
+    }
+
+    private static void EnsureSuccess(HttpResponseMessage response)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        TimeSpan? retryAfter = response.Headers.RetryAfter?.Delta
+            ?? (response.Headers.RetryAfter?.Date is { } date ? date - DateTimeOffset.UtcNow : null);
+
+        throw new DownloadFailedException(
+            $"Server answered {(int)response.StatusCode} {response.StatusCode}",
+            (int)response.StatusCode,
+            retryAfter > TimeSpan.Zero ? retryAfter : null,
+            TransientStatusCodes.Contains(response.StatusCode));
     }
 
     /// <summary>
@@ -125,14 +193,16 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         return Path.Combine(directory, $"{stem} ({Guid.NewGuid():N}){extension}");
     }
 
-    private static async Task<long> CopyToPartialFileAsync(
+    private async Task<long> CopyToPartialFileAsync(
         HttpResponseMessage response,
         string partialPath,
         long? totalBytes,
         IProgress<DownloadProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationTokenSource idle,
+        CancellationToken linkedToken,
+        CancellationToken callerToken)
     {
-        await using Stream source = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using Stream source = await response.Content.ReadAsStreamAsync(linkedToken);
         await using FileStream target = new(
             partialPath,
             FileMode.Create,
@@ -146,23 +216,45 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         bool hasReported = false;
         Stopwatch sinceLastReport = Stopwatch.StartNew();
 
-        int read;
-        while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+        try
         {
-            await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-            bytesWritten += read;
-
-            // Report the first chunk immediately so the UI reacts at once, then throttle;
-            // an unthrottled report per 80 KB read would flood the dispatcher on large files.
-            if (!hasReported || sinceLastReport.Elapsed >= ProgressInterval)
+            int read;
+            while ((read = await source.ReadAsync(buffer, linkedToken)) > 0)
             {
-                progress?.Report(new DownloadProgress(bytesWritten, totalBytes));
-                hasReported = true;
-                sinceLastReport.Restart();
+                idle.CancelAfter(_idleTimeout);
+
+                await target.WriteAsync(buffer.AsMemory(0, read), linkedToken);
+                bytesWritten += read;
+
+                // Report the first chunk immediately so the UI reacts at once, then throttle;
+                // an unthrottled report per 80 KB read would flood the dispatcher on large files.
+                if (!hasReported || sinceLastReport.Elapsed >= ProgressInterval)
+                {
+                    progress?.Report(new DownloadProgress(bytesWritten, totalBytes));
+                    hasReported = true;
+                    sinceLastReport.Restart();
+                }
             }
         }
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        {
+            throw new DownloadFailedException(
+                $"The server stopped sending data for {_idleTimeout.TotalSeconds:0} seconds.",
+                statusCode: null,
+                retryAfter: null,
+                isTransient: true);
+        }
+        catch (IOException exception)
+        {
+            throw new DownloadFailedException(
+                $"The connection failed after {bytesWritten} bytes.",
+                statusCode: null,
+                retryAfter: null,
+                isTransient: true,
+                exception);
+        }
 
-        await target.FlushAsync(cancellationToken);
+        await target.FlushAsync(linkedToken);
         return bytesWritten;
     }
 

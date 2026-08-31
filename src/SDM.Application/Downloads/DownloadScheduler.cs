@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using SDM.Core.Downloads;
 
@@ -6,7 +7,9 @@ namespace SDM.Application.Downloads;
 public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
 {
     private readonly IStartDownloadUseCase _startDownload;
-    private readonly SemaphoreSlim _slots;
+    private readonly SemaphoreSlim _globalSlots;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _hostSlots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly int _maximumPerHost;
 
     public DownloadScheduler(IStartDownloadUseCase startDownload, IOptions<DownloadOptions> options)
     {
@@ -14,29 +17,64 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
         ArgumentNullException.ThrowIfNull(options);
 
         _startDownload = startDownload;
-        _slots = new SemaphoreSlim(options.Value.MaximumConcurrent, options.Value.MaximumConcurrent);
+        _globalSlots = new SemaphoreSlim(options.Value.MaximumConcurrent, options.Value.MaximumConcurrent);
+        _maximumPerHost = options.Value.MaximumPerHost;
     }
 
     public async Task<DownloadResult> EnqueueAsync(
         string address,
         IProgress<DownloadProgress>? progress = null,
         Action? onStarted = null,
+        Action<DownloadRetry>? onRetry = null,
         CancellationToken cancellationToken = default)
     {
-        await _slots.WaitAsync(cancellationToken);
+        SemaphoreSlim host = HostSlotsFor(address);
+
+        // The host slot is taken first on purpose. Taking the global slot first would let
+        // three transfers queued behind one busy server occupy every global slot and stall
+        // downloads from other hosts that could have run immediately.
+        await host.WaitAsync(cancellationToken);
 
         try
         {
-            // Only now is the transfer really beginning; the caller has been showing it
-            // as queued until this point.
-            onStarted?.Invoke();
-            return await _startDownload.ExecuteAsync(address, progress, cancellationToken);
+            await _globalSlots.WaitAsync(cancellationToken);
+
+            try
+            {
+                // Only now is the transfer really beginning; the caller has been showing it
+                // as queued until this point.
+                onStarted?.Invoke();
+                return await _startDownload.ExecuteAsync(address, progress, onRetry, cancellationToken);
+            }
+            finally
+            {
+                _globalSlots.Release();
+            }
         }
         finally
         {
-            _slots.Release();
+            host.Release();
         }
     }
 
-    public void Dispose() => _slots.Dispose();
+    private SemaphoreSlim HostSlotsFor(string address)
+    {
+        string key = Uri.TryCreate(address.Trim(), UriKind.Absolute, out Uri? source)
+            ? source.Host
+            : string.Empty;
+
+        return _hostSlots.GetOrAdd(key, _ => new SemaphoreSlim(_maximumPerHost, _maximumPerHost));
+    }
+
+    public void Dispose()
+    {
+        _globalSlots.Dispose();
+
+        foreach (SemaphoreSlim host in _hostSlots.Values)
+        {
+            host.Dispose();
+        }
+
+        _hostSlots.Clear();
+    }
 }

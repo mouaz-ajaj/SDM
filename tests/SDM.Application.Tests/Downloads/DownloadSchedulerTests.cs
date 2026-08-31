@@ -77,8 +77,52 @@ public sealed class DownloadSchedulerTests
         await holder;
     }
 
-    private static DownloadScheduler Create(IStartDownloadUseCase useCase, int maximumConcurrent) =>
-        new(useCase, Options.Create(new DownloadOptions { MaximumConcurrent = maximumConcurrent }));
+    [Fact]
+    public async Task EnqueueAsync_LimitsConcurrencyPerHostSoServersDoNotRejectUs()
+    {
+        GateKeepingUseCase useCase = new();
+        using DownloadScheduler scheduler = Create(useCase, maximumConcurrent: 6, maximumPerHost: 2);
+
+        Task[] sameHost = [.. Enumerable.Range(0, 5).Select(index => scheduler.EnqueueAsync(
+            $"https://one.example.test/file{index}.bin",
+            cancellationToken: TestContext.Current.CancellationToken))];
+
+        await useCase.WaitForRunningAsync(2, TestContext.Current.CancellationToken);
+        await Task.Delay(120, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, useCase.PeakConcurrency);
+
+        useCase.ReleaseAll();
+        await Task.WhenAll(sameHost);
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_LetsDifferentHostsRunInParallel()
+    {
+        GateKeepingUseCase useCase = new();
+        using DownloadScheduler scheduler = Create(useCase, maximumConcurrent: 3, maximumPerHost: 1);
+
+        Task[] mixed =
+        [
+            scheduler.EnqueueAsync("https://a.example.test/x.bin", cancellationToken: TestContext.Current.CancellationToken),
+            scheduler.EnqueueAsync("https://b.example.test/x.bin", cancellationToken: TestContext.Current.CancellationToken),
+            scheduler.EnqueueAsync("https://c.example.test/x.bin", cancellationToken: TestContext.Current.CancellationToken),
+        ];
+
+        await useCase.WaitForRunningAsync(3, TestContext.Current.CancellationToken);
+        Assert.Equal(3, useCase.PeakConcurrency);
+
+        useCase.ReleaseAll();
+        await Task.WhenAll(mixed);
+    }
+
+    private static DownloadScheduler Create(
+        IStartDownloadUseCase useCase, int maximumConcurrent, int maximumPerHost = 16) =>
+        new(useCase, Options.Create(new DownloadOptions
+        {
+            MaximumConcurrent = maximumConcurrent,
+            MaximumPerHost = Math.Min(maximumPerHost, maximumConcurrent),
+        }));
 
     /// <summary>A use case that blocks until released, so concurrency can be observed.</summary>
     private sealed class GateKeepingUseCase : IStartDownloadUseCase
@@ -97,6 +141,7 @@ public sealed class DownloadSchedulerTests
         public async Task<DownloadResult> ExecuteAsync(
             string address,
             IProgress<DownloadProgress>? progress = null,
+            Action<DownloadRetry>? onRetry = null,
             CancellationToken cancellationToken = default)
         {
             lock (_sync)

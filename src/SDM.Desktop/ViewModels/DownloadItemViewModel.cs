@@ -83,7 +83,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         try
         {
             DownloadResult result = await _scheduler.EnqueueAsync(
-                _address, progress, OnStarted, _cancellation.Token);
+                _address, progress, OnStarted, OnRetry, _cancellation.Token);
 
             FileName = Path.GetFileName(result.DestinationPath);
             Percentage = 100;
@@ -98,6 +98,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             Fail(DownloadStatus.Cancelled, "Cancelled");
         }
         catch (ArgumentException exception)
+        {
+            Fail(DownloadStatus.Failed, exception.Message);
+        }
+        catch (DownloadFailedException exception)
         {
             Fail(DownloadStatus.Failed, exception.Message);
         }
@@ -146,6 +150,17 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         {
             _cancellation.Cancel();
         }
+    }
+
+    private void OnRetry(DownloadRetry retry)
+    {
+        Status = DownloadStatus.Pending;
+        IsIndeterminate = true;
+        Percentage = 0;
+        SpeedText = string.Empty;
+        RemainingText = string.Empty;
+        Detail = $"{retry.Reason} — retrying in {retry.Delay.TotalSeconds:0}s "
+            + $"(attempt {retry.Attempt} of {retry.MaximumAttempts})";
     }
 
     private void OnStarted()
