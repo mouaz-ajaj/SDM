@@ -4,30 +4,48 @@
 // and the registry key that tools/install-native-host.ps1 writes; nothing here can work if
 // those three disagree, and Chrome's only complaint will be "host not found".
 const HOST = "com.sdm.host";
-const MENU = "sdm-download";
+
+// One entry per kind of thing that can be downloaded, rather than one entry that guesses.
+//
+// A right-click on an image inside a link reports both a link and a source, and the first
+// version of this file preferred the link — which turned "download this image" into
+// downloading the product page wrapped around it. There is no rule that gets this right:
+// on a thumbnail linking to the full picture the image is wrong, and on an image linking
+// to an article the link is wrong. Chrome does not guess either, which is why its own menu
+// offers "Save link as…" and "Save image as…" side by side. So does this one: on a plain
+// link only the first appears, and on a linked image both do.
+const MENUS = [
+  { id: "sdm-link", title: "Download link with SDM", contexts: ["link"], from: "linkUrl" },
+  { id: "sdm-image", title: "Download image with SDM", contexts: ["image"], from: "srcUrl" },
+  { id: "sdm-video", title: "Download video with SDM", contexts: ["video"], from: "srcUrl" },
+  { id: "sdm-audio", title: "Download audio with SDM", contexts: ["audio"], from: "srcUrl" },
+];
 
 // A service worker is stopped whenever it is idle, so nothing may live in a variable
-// between events. Context menu entries are stored by the browser rather than by us, which
-// is why they are created on install and not on every start — creating them again on a
-// restart would fail with "duplicate id".
-chrome.runtime.onInstalled.addListener(() => {
+// between events. Context menu entries are stored by the browser rather than by us, so
+// they are rebuilt from scratch — removeAll first, because creating an id that already
+// exists fails, and an extension reloaded during development would otherwise lose its menu.
+function install() {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: MENU,
-      title: "Download with SDM",
-      contexts: ["link", "image", "video", "audio"],
-    });
+    for (const menu of MENUS) {
+      chrome.contextMenus.create({ id: menu.id, title: menu.title, contexts: menu.contexts });
+    }
   });
-});
+}
+
+chrome.runtime.onInstalled.addListener(install);
+chrome.runtime.onStartup.addListener(install);
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== MENU) {
+  const menu = MENUS.find((candidate) => candidate.id === info.menuItemId);
+
+  if (!menu) {
     return;
   }
 
-  // A right-click on a linked image reports both. The link is what was aimed at; the
-  // image is what happened to be under the pointer.
-  const url = info.linkUrl || info.srcUrl;
+  // Each entry reads the field its own context is about, so nothing is inferred from
+  // which fields happen to be present.
+  const url = info[menu.from];
 
   if (url) {
     send(url, tab && tab.url);

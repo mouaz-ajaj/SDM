@@ -400,6 +400,12 @@ closing, and then dropped it — the application detaches its handler before dis
 bridge. The extension would have reported a download that never existed. Seen for real
 during this phase, and now refused with an error instead.
 
+**Corrected after first real use:** one menu entry cannot serve a linked image. It reports
+both a link and a source, and preferring the link turned "download this image" into
+downloading the product page around it. There is one entry per kind now — link, image,
+video, audio — so nothing is inferred from which fields happen to be present. Chrome's own
+menu makes the same choice with "Save link as…" beside "Save image as…".
+
 **Still needs a person:** loading the folder once at `chrome://extensions`. Nothing in this
 repository can do that.
 

@@ -1,7 +1,18 @@
 # SDM browser extension
 
-Right-click a link → **Download with SDM**. The link goes to the running application, and
-SDM starts if it is not running.
+Right-click → **Download link with SDM**, or **Download image / video / audio with SDM**.
+Whatever you picked goes to the running application, and SDM starts if it is not running.
+
+## Why there is an entry per kind, not one entry
+
+A right-click on an image inside a link reports both a link and a source. There is no rule
+that resolves that correctly: on a thumbnail linking to the full picture the image is
+wrong, and on an image linking to an article the link is wrong.
+
+The first version preferred the link, which turned "download this image" into downloading
+the product page wrapped around it. Chrome does not guess either — its own menu offers
+"Save link as…" and "Save image as…" side by side — so neither does this. On a plain link
+only one entry appears; on a linked image, both do, and you choose.
 
 This is the whole extension for now. Taking over the browser's own downloads is
 [Phase 4.3](../docs/roadmap.md), and forwarding cookies is Phase 4.4.
