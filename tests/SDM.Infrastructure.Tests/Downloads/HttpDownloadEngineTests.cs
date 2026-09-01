@@ -36,6 +36,55 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAsync_NamesAnExtensionlessFileAfterItsType()
+    {
+        // A URL ending in an opaque id used to produce a file Windows could not open,
+        // preview or associate with a program — while the server had said plainly that
+        // it was a JPEG.
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("thumbnail"), _workingDirectory),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.Combine(_workingDirectory, "thumbnail.jpg"), result.DestinationPath);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_LeavesAnExistingExtensionAlone()
+    {
+        // Servers mislabel Content-Type far more often than they mislabel names, so a
+        // .zip served as application/octet-stream stays a .zip and gains nothing.
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("archive.zip"), _workingDirectory),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.Combine(_workingDirectory, "archive.zip"), result.DestinationPath);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_OffersTheSameNameTheTransferWouldUse()
+    {
+        // Otherwise the save dialog shows a bare "thumbnail" for the user to correct by
+        // hand, and the file that arrives is named something else again.
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadProbe probe = await engine.ProbeAsync(
+            server.Url("thumbnail"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("thumbnail.jpg", probe.FileName);
+        Assert.Equal(FileCategory.Images, probe.Category);
+    }
+
+    [Fact]
     public async Task DownloadAsync_DoesNotPresentAShortFileAsFinished()
     {
         // The question this answers: if the server stops half way, does SDM hand over a
@@ -696,6 +745,21 @@ public sealed class HttpDownloadEngineTests : IDisposable
 
             case "/hostile":
                 context.Response.AddHeader("Content-Disposition", "attachment; filename=\"../../escaped.txt\"");
+                context.Response.ContentLength64 = _small.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
+                break;
+
+            case "/thumbnail":
+                // A Google image thumbnail in miniature: an opaque id, no extension
+                // anywhere in the URL, and the type stated only in the header.
+                context.Response.ContentType = "image/jpeg";
+                context.Response.ContentLength64 = _small.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
+                break;
+
+            case "/archive.zip":
+                // The name says zip and the server says "bytes". The name wins.
+                context.Response.ContentType = "application/octet-stream";
                 context.Response.ContentLength64 = _small.Length;
                 await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
                 break;

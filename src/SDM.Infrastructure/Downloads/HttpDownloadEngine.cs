@@ -113,7 +113,9 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         string? suggested = response.Content.Headers.ContentDisposition?.FileNameStar
             ?? response.Content.Headers.ContentDisposition?.FileName;
 
-        string fileName = SafeFileName.Resolve(suggested, source);
+        // The same name the transfer would settle on, so the save dialog offers
+        // "photo.jpg" rather than a bare "photo" the user has to correct by hand.
+        string fileName = AddExtensionIfMissing(SafeFileName.Resolve(suggested, source), mediaType);
 
         long? totalBytes = response.Content.Headers.ContentRange?.Length
             ?? (ranged ? null : response.Content.Headers.ContentLength);
@@ -539,7 +541,8 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         string? suggested = response.Content.Headers.ContentDisposition?.FileNameStar
             ?? response.Content.Headers.ContentDisposition?.FileName;
 
-        string fileName = request.PreferredFileName ?? SafeFileName.Resolve(suggested, request.Source);
+        string fileName = AddExtensionIfMissing(
+            request.PreferredFileName ?? SafeFileName.Resolve(suggested, request.Source), mediaType);
 
         // Only now, with both the settled name and the server's type in hand, can the
         // category folder be chosen — unless the user picked a folder in a save dialog,
@@ -564,6 +567,27 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         // The system save dialog has already asked about replacing an existing file, so
         // second-guessing it with "name (1)" would ignore what the user just said.
         return request.ChosenByUser ? candidate : EnsureUnique(candidate);
+    }
+
+    /// <summary>
+    /// Gives a nameless file the extension its type implies. A URL ending in an opaque id
+    /// yields a name like "images", and Windows has no way to open, preview or associate a
+    /// file with no extension — while the server had already said it was a JPEG.
+    ///
+    /// A name that already has an extension is never touched. Servers mislabel Content-Type
+    /// far more often than they mislabel names, and a .zip served as octet-stream must stay
+    /// a .zip.
+    /// </summary>
+    private static string AddExtensionIfMissing(string fileName, string? mediaType)
+    {
+        if (Path.GetExtension(fileName).Length > 1)
+        {
+            return fileName;
+        }
+
+        return MediaTypeExtensions.ForMediaType(mediaType) is { } extension
+            ? fileName + extension
+            : fileName;
     }
 
     private static string EnsureUnique(string path)

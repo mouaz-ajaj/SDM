@@ -24,6 +24,8 @@ It is under active development. What works and what does not is listed plainly b
 **Files**
 - Names taken from `Content-Disposition`, sanitised so a hostile header cannot write
   outside the download folder
+- An extension added from the server's type when the URL has none, so a Google image
+  saved as `images` becomes `images.jpg` and Windows can open it
 - Sorted into Documents, Video, Audio, Images, Programs, and Compressed by extension
   first, then by the server's content type
 - An optional save dialog, shown before the transfer starts, that reports what the
@@ -95,7 +97,7 @@ dotnet build SDM.sln --configuration Release --no-restore
 dotnet test  SDM.sln --configuration Release --no-build
 ```
 
-Warnings are errors here, and the suite is 156 tests. Tests that need a server run against
+Warnings are errors here, and the suite is 179 tests. Tests that need a server run against
 a local `HttpListener`, never the public internet.
 
 ## Run
