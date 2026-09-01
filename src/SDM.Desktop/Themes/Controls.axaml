@@ -134,17 +134,46 @@
     <Setter Property="Padding" Value="0" />
   </Style>
 
+  <!--
+    A full template rather than Fluent's. Its selection indicator is a fixed-size pill
+    positioned independently of the header, so with custom padding it sits under the
+    wrong width and runs into the neighbouring tab. Here the underline IS the tab's own
+    bottom border, so the two cannot disagree.
+  -->
   <Style Selector="TabControl.detail TabItem">
     <Setter Property="FontSize" Value="11.5" />
     <Setter Property="MinHeight" Value="0" />
-    <Setter Property="Padding" Value="12,9" />
+    <Setter Property="Padding" Value="13,9" />
     <Setter Property="Margin" Value="0" />
     <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="Shell"
+                Background="Transparent"
+                BorderBrush="Transparent"
+                BorderThickness="0,0,0,2"
+                Padding="{TemplateBinding Padding}">
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Header}"
+                            ContentTemplate="{TemplateBinding HeaderTemplate}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+
+  <Style Selector="TabControl.detail TabItem:pointerover">
+    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
   </Style>
 
   <Style Selector="TabControl.detail TabItem:selected">
     <Setter Property="FontWeight" Value="SemiBold" />
     <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+  </Style>
+
+  <Style Selector="TabControl.detail TabItem:selected /template/ Border#Shell">
+    <Setter Property="BorderBrush" Value="{StaticResource BrandSkyBrush}" />
   </Style>
 
   <!-- Compact variants for the toolbar -->
@@ -186,6 +215,13 @@
   <Style Selector="ProgressBar.row">
     <Setter Property="Height" Value="5" />
     <Setter Property="MinHeight" Value="5" />
+
+    <!--
+      Fluent gives ProgressBar a 200 px MinWidth. In a table column narrower than that
+      the bar refuses to shrink and paints straight over the neighbouring cells, which
+      is exactly what it did here.
+    -->
+    <Setter Property="MinWidth" Value="0" />
     <Setter Property="CornerRadius" Value="3" />
     <Setter Property="VerticalAlignment" Value="Center" />
     <Setter Property="Foreground" Value="{StaticResource BrandGradientBrush}" />
@@ -418,14 +454,5 @@
   </Style>
 
   <!-- Progress -->
-
-  <Style Selector="ProgressBar.brand">
-    <Setter Property="Height" Value="8" />
-    <Setter Property="MinHeight" Value="8" />
-    <Setter Property="CornerRadius" Value="4" />
-    <Setter Property="Foreground" Value="{StaticResource BrandGradientBrush}" />
-    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
-    <Setter Property="BorderThickness" Value="0" />
-  </Style>
 
 </Styles>
