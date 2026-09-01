@@ -18,15 +18,18 @@ public sealed class BridgeClient
     private readonly TimeSpan _connectTimeout;
     private readonly TimeSpan _startupTimeout;
     private readonly Func<bool> _startApplication;
+    private readonly string _pipeName;
 
     public BridgeClient(
         TimeSpan? connectTimeout = null,
         TimeSpan? startupTimeout = null,
-        Func<bool>? startApplication = null)
+        Func<bool>? startApplication = null,
+        string? pipeName = null)
     {
         _connectTimeout = connectTimeout ?? TimeSpan.FromSeconds(2);
         _startupTimeout = startupTimeout ?? TimeSpan.FromSeconds(20);
         _startApplication = startApplication ?? StartApplication;
+        _pipeName = pipeName ?? BridgeProtocol.PipeName;
     }
 
     public async Task<BridgeReply> SendAsync(BridgeMessage message, CancellationToken cancellationToken = default)
@@ -35,7 +38,7 @@ public sealed class BridgeClient
 
         try
         {
-            return await TrySendAsync(message, _connectTimeout, cancellationToken);
+            return await TrySendAsync(message, _pipeName, _connectTimeout, cancellationToken);
         }
         catch (TimeoutException)
         {
@@ -50,7 +53,7 @@ public sealed class BridgeClient
 
         try
         {
-            return await TrySendAsync(message, _startupTimeout, cancellationToken);
+            return await TrySendAsync(message, _pipeName, _startupTimeout, cancellationToken);
         }
         catch (TimeoutException)
         {
@@ -59,10 +62,10 @@ public sealed class BridgeClient
     }
 
     private static async Task<BridgeReply> TrySendAsync(
-        BridgeMessage message, TimeSpan timeout, CancellationToken cancellationToken)
+        BridgeMessage message, string pipeName, TimeSpan timeout, CancellationToken cancellationToken)
     {
         await using NamedPipeClientStream pipe = new(
-            ".", BridgeProtocol.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 
         await pipe.ConnectAsync((int)timeout.TotalMilliseconds, cancellationToken);
 

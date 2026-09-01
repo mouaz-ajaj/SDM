@@ -4,6 +4,7 @@ namespace SDM.IntegrationTests;
 
 public sealed class ArchitectureReferenceTests
 {
+
     private static readonly IReadOnlyDictionary<string, string[]> ExpectedReferences =
         new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
@@ -20,6 +21,12 @@ public sealed class ArchitectureReferenceTests
                     "src/SDM.Database/SDM.Database.csproj",
                     "src/SDM.Infrastructure/SDM.Infrastructure.csproj",
                 ],
+            ["src/SDM.NativeHost/SDM.NativeHost.csproj"] =
+                [
+                    "src/SDM.Application/SDM.Application.csproj",
+                    "src/SDM.Core/SDM.Core.csproj",
+                    "src/SDM.Infrastructure/SDM.Infrastructure.csproj",
+                ],
         };
 
     [Fact]
@@ -34,6 +41,7 @@ public sealed class ArchitectureReferenceTests
             string projectDirectory = Path.GetDirectoryName(fullProjectPath)!;
 
             string[] actual = project.Descendants("ProjectReference")
+                .Where(reference => !IsBuildOnly(reference))
                 .Select(reference => reference.Attribute("Include")?.Value)
                 .Where(include => include is not null)
                 .Select(include => Path.GetFullPath(Path.Combine(projectDirectory, include!)))
@@ -65,6 +73,22 @@ public sealed class ArchitectureReferenceTests
             Assert.DoesNotContain(packages, package => package.StartsWith("Avalonia", StringComparison.Ordinal));
             Assert.DoesNotContain(packages, package => package.Contains("Sqlite", StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    /// <summary>
+    /// ReferenceOutputAssembly="false" marks a build-order and packaging instruction
+    /// rather than a code dependency — Desktop uses one so the native host is built and
+    /// copied beside it. Matched by local name because SDK-style project files carry no
+    /// XML namespace, which is why the first attempt at this filter matched nothing.
+    /// </summary>
+    private static bool IsBuildOnly(XElement reference)
+    {
+        string? value = reference.Attribute("ReferenceOutputAssembly")?.Value
+            ?? reference.Elements()
+                .FirstOrDefault(child => child.Name.LocalName == "ReferenceOutputAssembly")
+                ?.Value;
+
+        return string.Equals(value, "false", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FindRepositoryRoot()

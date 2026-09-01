@@ -12,8 +12,16 @@ namespace SDM.NativeHost.Tests;
 /// </summary>
 public sealed class BridgeRoundTripTests : IAsyncLifetime
 {
-    private readonly NamedPipeBrowserBridge _bridge =
-        new(new StubApplicationInfo(), NullLogger<NamedPipeBrowserBridge>.Instance);
+    // A private pipe. The real name belongs to whatever copy of SDM is running, and a
+    // test that quietly talks to the live application instead of its own bridge proves
+    // nothing — which is exactly what happened the first time these were written.
+    private readonly string _pipeName = $"sdm.test.{Guid.NewGuid():N}";
+
+    private readonly NamedPipeBrowserBridge _bridge;
+
+    public BridgeRoundTripTests() =>
+        _bridge = new NamedPipeBrowserBridge(
+            new StubApplicationInfo(), NullLogger<NamedPipeBrowserBridge>.Instance, _pipeName);
 
     private readonly List<BridgeMessage> _received = [];
 
@@ -123,12 +131,17 @@ public sealed class BridgeRoundTripTests : IAsyncLifetime
     public void Address_NamesAPipeScopedToThisUser()
     {
         // A machine-wide pipe would let another signed-in user queue downloads here.
-        Assert.Contains(Environment.UserName.ToLowerInvariant(), _bridge.Address, StringComparison.Ordinal);
+        Assert.Contains(
+            Environment.UserName.ToLowerInvariant(),
+            BridgeProtocol.PipeName,
+            StringComparison.Ordinal);
+
+        Assert.StartsWith(@"\\.\pipe\", _bridge.Address, StringComparison.Ordinal);
     }
 
     /// <summary>Never starts the application: a test must not spawn a window.</summary>
-    private static BridgeClient Client() =>
-        new(connectTimeout: TimeSpan.FromSeconds(5), startApplication: () => false);
+    private BridgeClient Client() =>
+        new(connectTimeout: TimeSpan.FromSeconds(5), startApplication: () => false, pipeName: _pipeName);
 
     private List<BridgeMessage> Snapshot()
     {

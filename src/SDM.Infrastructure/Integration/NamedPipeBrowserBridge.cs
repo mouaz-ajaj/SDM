@@ -20,25 +20,33 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
     private readonly IApplicationInfoService _applicationInfo;
     private readonly ILogger<NamedPipeBrowserBridge> _logger;
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly string _pipeName;
 
     private Task? _acceptLoop;
 
+    /// <param name="pipeName">
+    /// Null uses the per-user name. Tests pass their own: the real name is taken by any
+    /// running copy of SDM, and a test that quietly talks to the live application
+    /// instead of its own bridge proves nothing.
+    /// </param>
     public NamedPipeBrowserBridge(
         IApplicationInfoService applicationInfo,
-        ILogger<NamedPipeBrowserBridge> logger)
+        ILogger<NamedPipeBrowserBridge> logger,
+        string? pipeName = null)
     {
         ArgumentNullException.ThrowIfNull(applicationInfo);
         ArgumentNullException.ThrowIfNull(logger);
 
         _applicationInfo = applicationInfo;
         _logger = logger;
+        _pipeName = pipeName ?? BridgeProtocol.PipeName;
     }
 
     public event EventHandler<BridgeMessage>? DownloadRequested;
 
     public bool IsRunning { get; private set; }
 
-    public string Address => $@"\\.\pipe\{BridgeProtocol.PipeName}";
+    public string Address => @"\\.\pipe\" + _pipeName;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -78,14 +86,14 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
         }
     }
 
-    private static NamedPipeServerStream CreateServer() =>
+    private NamedPipeServerStream CreateServer() =>
         OperatingSystem.IsWindows()
             ? CreateRestrictedServer()
 
             // Elsewhere a named pipe is a socket in the user's own runtime directory, so
             // the file system already restricts it to one user.
             : new NamedPipeServerStream(
-                BridgeProtocol.PipeName,
+                _pipeName,
                 PipeDirection.InOut,
                 NamedPipeServerStream.MaxAllowedServerInstances,
                 PipeTransmissionMode.Byte,
@@ -96,7 +104,7 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
     /// signed in to the machine, and a download request is a request to write a file.
     /// </summary>
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static NamedPipeServerStream CreateRestrictedServer()
+    private NamedPipeServerStream CreateRestrictedServer()
     {
         PipeSecurity security = new();
         security.AddAccessRule(new PipeAccessRule(
@@ -105,7 +113,7 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
             AccessControlType.Allow));
 
         return NamedPipeServerStreamAcl.Create(
-            BridgeProtocol.PipeName,
+            _pipeName,
             PipeDirection.InOut,
             NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte,
