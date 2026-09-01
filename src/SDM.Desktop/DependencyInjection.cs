@@ -15,6 +15,10 @@ public static class DependencyInjection
         services.AddSingleton<IFolderPicker>(
             provider => provider.GetRequiredService<StorageProviderFolderPicker>());
 
+        services.AddSingleton<SystemShell>();
+        services.AddSingleton<ISystemShell>(
+            provider => provider.GetRequiredService<SystemShell>());
+
         services.AddSingleton<DialogSaveLocationPicker>();
         services.AddSingleton<ISaveLocationPicker>(
             provider => provider.GetRequiredService<DialogSaveLocationPicker>());

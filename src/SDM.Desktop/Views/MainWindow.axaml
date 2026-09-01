@@ -116,7 +116,23 @@
                  IsVisible="{Binding HasDownloads}" Margin="16,0,16,0">
           <ListBox.ItemTemplate>
             <DataTemplate x:DataType="vm:DownloadItemViewModel">
-              <Grid ColumnDefinitions="*,72,118,80,76,94,60" Height="32">
+              <Grid ColumnDefinitions="*,72,118,80,76,94,60" Height="32" Background="Transparent"
+                    PointerPressed="OnRowPointerPressed">
+
+                <!-- The row itself is the menu's context, so the commands act on the row
+                     that was right-clicked rather than on whatever happens to be selected. -->
+                <Grid.ContextFlyout>
+                  <MenuFlyout Placement="Pointer">
+                    <MenuItem Header="Open file" Command="{Binding OpenFileCommand}" />
+                    <MenuItem Header="Open containing folder" Command="{Binding OpenFolderCommand}" />
+                    <Separator />
+                    <MenuItem Header="Copy link" Command="{Binding CopyLinkCommand}" />
+                    <Separator />
+                    <MenuItem Header="Remove from list" Command="{Binding RemoveFromListCommand}" />
+                    <MenuItem Header="Remove and delete file" Classes="danger"
+                              Command="{Binding RemoveWithFileCommand}" />
+                  </MenuFlyout>
+                </Grid.ContextFlyout>
 
                 <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
                   <Border Width="4" Height="16" CornerRadius="2" Background="{Binding CategoryBrush}" />

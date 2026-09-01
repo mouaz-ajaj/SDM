@@ -35,6 +35,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IDownloadFolder _downloadFolder;
     private readonly ISaveLocationPicker _picker;
     private readonly DialogSaveLocationPicker _dialogs;
+    private readonly ISystemShell _shell;
     private readonly IOptionsMonitor<DownloadOptions> _options;
     private readonly IBrowserBridge _bridge;
     private readonly ILogger<MainWindowViewModel> _logger;
@@ -71,6 +72,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IDownloadFolder downloadFolder,
         ISaveLocationPicker picker,
         DialogSaveLocationPicker dialogs,
+        ISystemShell shell,
         IOptionsMonitor<DownloadOptions> options,
         IBrowserBridge bridge,
         ILogger<MainWindowViewModel> logger)
@@ -81,6 +83,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(downloadFolder);
         ArgumentNullException.ThrowIfNull(picker);
         ArgumentNullException.ThrowIfNull(dialogs);
+        ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(bridge);
         ArgumentNullException.ThrowIfNull(logger);
@@ -91,6 +94,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _downloadFolder = downloadFolder;
         _picker = picker;
         _dialogs = dialogs;
+        _shell = shell;
         _options = options;
         _bridge = bridge;
         _logger = logger;
@@ -137,7 +141,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             foreach (DownloadJob job in await _repository.GetAllAsync())
             {
-                Track(DownloadItemViewModel.Restore(_scheduler, _repository, _logger, job));
+                Track(DownloadItemViewModel.Restore(_scheduler, _repository, _shell, _logger, job));
             }
 
             _logger.LogInformation("Restored {Count} transfers from the previous session.", All.Count);
@@ -171,7 +175,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Dispatcher.UIThread.Post(() =>
         {
             DownloadItemViewModel item = DownloadItemViewModel.Create(
-                _scheduler, _repository, _logger, url);
+                _scheduler, _repository, _shell, _logger, url);
 
             Track(item, atTop: true);
             Selected = item;
@@ -215,7 +219,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Address = string.Empty;
 
         DownloadItemViewModel item = DownloadItemViewModel.Create(
-            _scheduler, _repository, _logger, address, destination);
+            _scheduler, _repository, _shell, _logger, address, destination);
 
         Track(item, atTop: true);
         Selected = item;
@@ -279,6 +283,39 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void ToggleDetail() => IsDetailOpen = !IsDetailOpen;
 
+    private void OnActionFailed(object? sender, string message) => ErrorMessage = message;
+
+    private void OnRemoveRequested(object? sender, TransferRemoval removal)
+    {
+        if (sender is DownloadItemViewModel item)
+        {
+            _ = RemoveAsync(item, removal);
+        }
+    }
+
+    /// <summary>
+    /// Removes one row. A running transfer is stopped first and waited for: taking the row
+    /// away while its connections are still writing would leave the file growing with
+    /// nothing on screen owning it, and deleting the file underneath them would fail.
+    /// </summary>
+    private async Task RemoveAsync(DownloadItemViewModel item, TransferRemoval removal)
+    {
+        ErrorMessage = null;
+
+        await item.StopAndWaitAsync(keepPartialFile: removal == TransferRemoval.KeepFile);
+
+        if (removal == TransferRemoval.DeleteFile)
+        {
+            item.DeleteFromDisk();
+        }
+
+        Untrack(item);
+        await item.ForgetAsync();
+        item.Dispose();
+
+        Refresh();
+    }
+
     /// <summary>
     /// Clears the rows the user is done with. This used to take everything that was not
     /// running — which included paused and failed transfers — and delete their partial
@@ -329,6 +366,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // A row's status changes which filter it belongs to and every count beside it, so
         // the list listens to each row rather than re-reading them on a timer.
         item.PropertyChanged += OnItemChanged;
+        item.RemoveRequested += OnRemoveRequested;
+        item.ActionFailed += OnActionFailed;
 
         if (atTop)
         {
@@ -343,6 +382,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void Untrack(DownloadItemViewModel item)
     {
         item.PropertyChanged -= OnItemChanged;
+        item.RemoveRequested -= OnRemoveRequested;
+        item.ActionFailed -= OnActionFailed;
         All.Remove(item);
 
         if (ReferenceEquals(Selected, item))

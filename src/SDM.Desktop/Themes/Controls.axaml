@@ -455,4 +455,43 @@
 
   <!-- Progress -->
 
+  <!-- Right-click menu on a transfer row -->
+
+  <Style Selector="MenuFlyoutPresenter">
+    <Setter Property="Background" Value="{StaticResource SurfaceCardBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource StrokeStrongBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="4" />
+    <Setter Property="MinWidth" Value="0" />
+  </Style>
+
+  <Style Selector="MenuFlyoutPresenter MenuItem">
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Padding" Value="10,0" />
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="CornerRadius" Value="5" />
+  </Style>
+
+  <Style Selector="MenuFlyoutPresenter MenuItem:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+  </Style>
+
+  <!-- Deleting a file is the one entry here that cannot be undone, and it is coloured
+       like the cancel button on the row so it is not read as another tidy-up. -->
+  <Style Selector="MenuFlyoutPresenter MenuItem.danger">
+    <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+  </Style>
+
+  <Style Selector="MenuFlyoutPresenter MenuItem:disabled">
+    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+  </Style>
+
+  <Style Selector="MenuFlyoutPresenter Separator">
+    <Setter Property="Background" Value="{StaticResource StrokeBrush}" />
+    <Setter Property="Height" Value="1" />
+    <Setter Property="Margin" Value="8,4" />
+  </Style>
+
 </Styles>

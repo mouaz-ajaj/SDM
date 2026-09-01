@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using SDM.Application.Downloads;
 using SDM.Core.Downloads;
+using SDM.Desktop.Services;
 
 namespace SDM.Desktop.ViewModels;
 
@@ -26,6 +27,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     private readonly IDownloadScheduler _scheduler;
     private readonly IDownloadRepository _repository;
+    private readonly ISystemShell _shell;
     private readonly ILogger _logger;
     private readonly Guid _id;
     private readonly string _address;
@@ -67,6 +69,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [NotifyCanExecuteChangedFor(nameof(CancelCommand))]
     [NotifyCanExecuteChangedFor(nameof(PauseCommand))]
     [NotifyCanExecuteChangedFor(nameof(ResumeCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenFileCommand))]
     private DownloadStatus _status = DownloadStatus.Pending;
 
     [ObservableProperty]
@@ -80,6 +83,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     /// <summary>Where the engine decided to write. Known once the response headers arrive.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasDestination))]
+    [NotifyCanExecuteChangedFor(nameof(OpenFileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RemoveWithFileCommand))]
     private string? _destinationPath;
 
     [ObservableProperty]
@@ -115,6 +122,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private DownloadItemViewModel(
         IDownloadScheduler scheduler,
         IDownloadRepository repository,
+        ISystemShell shell,
         ILogger logger,
         Guid id,
         string address,
@@ -124,6 +132,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         _destination = destination;
         _scheduler = scheduler;
         _repository = repository;
+        _shell = shell;
         _logger = logger;
         _id = id;
         _address = address;
@@ -134,17 +143,20 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     public static DownloadItemViewModel Create(
         IDownloadScheduler scheduler,
         IDownloadRepository repository,
+        ISystemShell shell,
         ILogger logger,
         string address,
         DownloadDestination? destination = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
 
         DownloadItemViewModel item = new(
-            scheduler, repository, logger, Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow, destination);
+            scheduler, repository, shell, logger,
+            Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow, destination);
 
         item.Persist();
         return item;
@@ -154,13 +166,15 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     public static DownloadItemViewModel Restore(
         IDownloadScheduler scheduler,
         IDownloadRepository repository,
+        ISystemShell shell,
         ILogger logger,
         DownloadJob job)
     {
         ArgumentNullException.ThrowIfNull(job);
+        ArgumentNullException.ThrowIfNull(shell);
 
         DownloadItemViewModel item = new(
-            scheduler, repository, logger, job.Id, job.Address, job.CreatedAt)
+            scheduler, repository, shell, logger, job.Id, job.Address, job.CreatedAt)
         {
             DestinationPath = job.DestinationPath,
             _bytesReceived = job.BytesReceived,
@@ -217,6 +231,9 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     /// finished, and it still owns a partial file and a resume button.
     /// </summary>
     public bool IsFinished => Status is DownloadStatus.Completed or DownloadStatus.Cancelled;
+
+    /// <summary>The engine has settled on a path, so there is a folder worth opening.</summary>
+    public bool HasDestination => DestinationPath is { Length: > 0 };
 
     public bool ShowsProgress => IsActive || IsPaused;
 
@@ -404,6 +421,76 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         IsIndeterminate = true;
 
         await RunAsync();
+    }
+
+    /// <summary>
+    /// Asks the list to take this row away. A row cannot remove itself: it does not own
+    /// the collection it is in, and the list has to stop the transfer and forget the row
+    /// in the database as well.
+    /// </summary>
+    public event EventHandler<TransferRemoval>? RemoveRequested;
+
+    /// <summary>
+    /// Something the user asked for did not happen — the file has been moved, the shell
+    /// refused. Raised rather than written into <see cref="Detail"/>, which is the
+    /// transfer's own story and not the place for a failed double-click.
+    /// </summary>
+    public event EventHandler<string>? ActionFailed;
+
+    [RelayCommand(CanExecute = nameof(IsCompleted))]
+    private void OpenFile()
+    {
+        if (!_shell.Open(DestinationPath ?? string.Empty))
+        {
+            ActionFailed?.Invoke(this, $"{FileName} is no longer where SDM put it.");
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(HasDestination))]
+    private void OpenFolder()
+    {
+        if (!_shell.Reveal(DestinationPath ?? string.Empty))
+        {
+            ActionFailed?.Invoke(this, "That folder could not be opened.");
+        }
+    }
+
+    [RelayCommand]
+    private Task CopyLinkAsync() => _shell.CopyAsync(_address);
+
+    [RelayCommand]
+    private void RemoveFromList() => RemoveRequested?.Invoke(this, TransferRemoval.KeepFile);
+
+    [RelayCommand(CanExecute = nameof(HasDestination))]
+    private void RemoveWithFile() => RemoveRequested?.Invoke(this, TransferRemoval.DeleteFile);
+
+    /// <summary>
+    /// Removes what this row put on disk. A finished transfer owns the file itself; an
+    /// unfinished one owns only a partial file, which the engine names and removes.
+    /// </summary>
+    public void DeleteFromDisk()
+    {
+        if (DestinationPath is not { Length: > 0 } path)
+        {
+            return;
+        }
+
+        if (!IsCompleted)
+        {
+            DiscardPartial();
+            return;
+        }
+
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Most likely the file is open in another program. The row still goes.
+            _logger.LogWarning(exception, "Could not delete {Path}.", path);
+            ActionFailed?.Invoke(this, $"{FileName} is in use and was not deleted.");
+        }
     }
 
     private void OnPlanned(DownloadPlan plan)

@@ -32,6 +32,8 @@ It is under active development. What works and what does not is listed plainly b
 **The application**
 - A console-style shell: status and category filters with live counts, a seven-column
   table, and a detail panel with Details, Connections, and History tabs
+- A right-click menu on any transfer: open the file, show it in its folder, copy the link,
+  and remove the row — keeping what is on disk, or deleting it
 - The transfer list is stored in SQLite and restored on the next launch
 - A settings screen writing to a user file outside the installation, so settings survive
   a rebuild and an update
@@ -49,8 +51,6 @@ It is under active development. What works and what does not is listed plainly b
   nothing has been published for Chrome to install, so downloads are not yet intercepted
   from the browser. See Track C in the [roadmap](docs/roadmap.md).
 - **Video.** No media detection, quality selection, HLS/DASH, or muxing.
-- **A right-click menu on a transfer** — opening the file or its folder, copying the link,
-  removing a single row.
 - **A speed limit**, scheduling, clipboard monitoring, notifications, and a tray icon.
 - **Packaging:** no installer, code signing, or updater.
 - Linux and macOS are not validated. Avalonia makes them reachable; nothing more.

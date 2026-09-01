@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using SDM.Desktop.Services;
 using SDM.Desktop.ViewModels;
@@ -8,6 +9,7 @@ namespace SDM.Desktop.Views;
 public sealed partial class MainWindow : Window
 {
     private readonly DialogSaveLocationPicker? _dialogs;
+    private readonly SystemShell? _shell;
 
     private bool _shutdownStarted;
 
@@ -16,11 +18,12 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
     }
 
-    public MainWindow(MainWindowViewModel viewModel, DialogSaveLocationPicker dialogs)
+    public MainWindow(MainWindowViewModel viewModel, DialogSaveLocationPicker dialogs, SystemShell shell)
         : this()
     {
         DataContext = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
+        _shell = shell ?? throw new ArgumentNullException(nameof(shell));
     }
 
     /// <summary>Restores the previous session once the window is up, not during construction.</summary>
@@ -30,9 +33,30 @@ public sealed partial class MainWindow : Window
 
         _dialogs?.Attach(this);
 
+        // The clipboard belongs to a window, and this is the first moment there is one.
+        _shell?.Attach(this);
+
         if (DataContext is MainWindowViewModel viewModel)
         {
             await viewModel.LoadAsync();
+        }
+    }
+
+    /// <summary>
+    /// Selects the row being right-clicked. Without this the menu would act on the row
+    /// under the pointer while the detail panel below still described a different one.
+    /// </summary>
+    private void OnRowPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
+        {
+            return;
+        }
+
+        if (sender is Control { DataContext: DownloadItemViewModel row }
+            && DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.Selected = row;
         }
     }
 

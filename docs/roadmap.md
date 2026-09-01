@@ -289,6 +289,27 @@ real table, and a detail panel with Details, Connections and History tabs.
 - The Connections tab shows one bar per part with its byte range.
 - Selecting a row keeps its selection while other rows change status.
 
+### Phase 3.10 — The right-click menu — DONE
+
+The cheapest feature left and the most noticeable: until now a finished download could not
+be opened from SDM at all, and a single row could not be removed.
+
+**Scope**
+- Open the file, show it in its folder, copy the link, remove the row.
+- `ISystemShell` — the one seam between a view model and the desktop environment, so a row
+  can offer all three without holding a window.
+- Removal is two entries, not one. `TransferRemoval` is an enum rather than a bool: the
+  difference between tidying a list and destroying a file should not be told apart by
+  reading a `true` at the call site. This is the same fault that made "Clear finished"
+  delete paused transfers.
+- Right-clicking selects the row, so the menu and the detail panel below always describe
+  the same transfer.
+
+**Acceptance**
+- Open and Open folder are unavailable until there is a file and a path to open.
+- Removing a running transfer stops it first rather than leaving it writing unseen.
+- "Remove from list" leaves the file; only "Remove and delete file" removes it.
+
 ### Phase 3.9 — Browser-facing settings (planned)
 
 The browser pane of the settings screen — bridge status, per-browser extension state,
