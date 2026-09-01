@@ -59,6 +59,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsActive))]
     [NotifyPropertyChangedFor(nameof(IsCompleted))]
+    [NotifyPropertyChangedFor(nameof(IsFinished))]
     [NotifyPropertyChangedFor(nameof(IsPaused))]
     [NotifyPropertyChangedFor(nameof(IsResumable))]
     [NotifyPropertyChangedFor(nameof(ShowsProgress))]
@@ -208,6 +209,14 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     /// <summary>Paused and failed rows can both be picked up again from their partial file.</summary>
     public bool IsResumable => Status is DownloadStatus.Paused or DownloadStatus.Failed;
+
+    /// <summary>
+    /// The transfer is over and nothing on disk is waiting on it: it either completed, or
+    /// the user threw it away with the row's own cancel button. Deliberately not the
+    /// inverse of <see cref="IsActive"/> — a paused or failed row is stopped but not
+    /// finished, and it still owns a partial file and a resume button.
+    /// </summary>
+    public bool IsFinished => Status is DownloadStatus.Completed or DownloadStatus.Cancelled;
 
     public bool ShowsProgress => IsActive || IsPaused;
 

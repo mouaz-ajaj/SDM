@@ -1,50 +1,100 @@
 # SDM — Speed Download Manager
 
-SDM is a Windows-first desktop download manager. This repository currently contains **Stage 1: Project Foundation and Architecture**.
+A Windows-first desktop download manager built on Avalonia and .NET 10.
 
-The application starts as a minimal Avalonia shell, loads configuration, builds its dependency graph, and logs its lifecycle. Actual downloading and browser integration are intentionally not implemented yet.
+SDM downloads a file over several connections at once, resumes a transfer that was
+interrupted — including by closing the application or losing power — sorts finished files
+into category folders, and accepts links handed to it by a browser over a native
+messaging host.
 
-## Technology stack
+It is under active development. What works and what does not is listed plainly below.
 
-- C# 14 and .NET 10
-- Avalonia UI 12 with MVVM
-- CommunityToolkit.Mvvm
-- Microsoft dependency injection, configuration, and logging
-- xUnit.net v3
-- GitHub Actions on Windows
+## What works today
+
+**Transfers**
+- Multi-part downloads: a range-capable file is split across several connections
+  (4 by default) writing into one preallocated file at their own offsets
+- Resume from a `.part` file and its sidecar, across restarts and crashes
+- Pause, resume, and cancel per transfer
+- Retry with exponential backoff and jitter, honouring `Retry-After`
+- An idle timeout, so a server that goes silent fails instead of hanging for ever
+- Global, per-host, and per-host-connection limits, so a busy site does not earn a 429
+- Live speed and ETA, per transfer and in total
+
+**Files**
+- Names taken from `Content-Disposition`, sanitised so a hostile header cannot write
+  outside the download folder
+- Sorted into Documents, Video, Audio, Images, Programs, and Compressed by extension
+  first, then by the server's content type
+- An optional save dialog, shown before the transfer starts, that reports what the
+  server actually said the file is — real name, size, type, and whether it can be resumed
+
+**The application**
+- A console-style shell: status and category filters with live counts, a seven-column
+  table, and a detail panel with Details, Connections, and History tabs
+- The transfer list is stored in SQLite and restored on the next launch
+- A settings screen writing to a user file outside the installation, so settings survive
+  a rebuild and an update
+- A rolling file log under `%LOCALAPPDATA%\SDM\logs`, written synchronously so the lines
+  before a crash reach the disk
+
+**Browser bridge**
+- A native messaging host (`SDM.NativeHost`) speaking Chrome's framing over stdin/stdout
+- A named pipe to the running application, restricted to the current user; the host never
+  downloads anything itself, so there is one engine however many browsers are connected
+
+## What does not exist yet
+
+- **The browser extension.** The host and the bridge are built and proven end to end, but
+  nothing has been published for Chrome to install, so downloads are not yet intercepted
+  from the browser. See Track C in the [roadmap](docs/roadmap.md).
+- **Video.** No media detection, quality selection, HLS/DASH, or muxing.
+- **A right-click menu on a transfer** — opening the file or its folder, copying the link,
+  removing a single row.
+- **A speed limit**, scheduling, clipboard monitoring, notifications, and a tray icon.
+- **Packaging:** no installer, code signing, or updater.
+- Linux and macOS are not validated. Avalonia makes them reachable; nothing more.
+
+## Technology
+
+C# 14, .NET 10, Avalonia UI 12 with compiled bindings, CommunityToolkit.Mvvm,
+`Microsoft.Data.Sqlite`, Microsoft dependency injection / configuration / logging,
+xUnit.net v3, GitHub Actions on Windows.
 
 ## Repository structure
 
 ```text
 src/
   SDM.Core/            Domain models and download abstractions
-  SDM.Application/     Application services and use-case orchestration
-  SDM.Infrastructure/  Future networking, filesystem, and OS implementations
-  SDM.Database/        Future persistence implementations
-  SDM.Desktop/         Avalonia UI and composition root
-tests/
-  SDM.Core.Tests/
-  SDM.Application.Tests/
-  SDM.IntegrationTests/
-docs/                  Product scope, architecture, and ADRs
-.github/workflows/      Windows CI
+  SDM.Application/     Use cases, scheduling, settings, and the bridge protocol
+  SDM.Infrastructure/  HTTP engine, partial files, logging, and the named pipe
+  SDM.Database/        SQLite persistence and its migrations
+  SDM.Desktop/         Avalonia UI and the composition root
+  SDM.NativeHost/      Chrome native messaging host
+tests/                 Core, Application, Infrastructure, NativeHost, Integration
+tools/                 Native host registration and acceptance scripts
+docs/                  Product scope, architecture, roadmap, and ADRs
 ```
 
-The pre-existing planning document and generated PNG concepts remain one directory above this repository; they are not compiled as part of the solution.
+Dependencies point in one direction only — Core ← Application ← {Infrastructure,
+Database} ← Desktop — and `ArchitectureReferenceTests` fails the build if that stops
+being true.
 
 ## Prerequisites
 
-- .NET SDK 10.0.301 or a compatible 10.0 feature band selected by `global.json`
-- Windows 10 or later is the primary supported development environment for Stage 1
+- .NET SDK 10.0.200, or a later 10.0 feature band, as selected by `global.json`
+- Windows 10 or later
 
-## Restore, build, and test
+## Build and test
 
 ```powershell
 dotnet restore SDM.sln
-dotnet build SDM.sln --configuration Debug --no-restore
 dotnet build SDM.sln --configuration Release --no-restore
-dotnet test SDM.sln --configuration Release --no-build
+dotnet test  SDM.sln --configuration Release --no-build
 ```
+
+Warnings are errors here, and the suite is 153 tests. Tests that need a server run against
+a local `HttpListener`, never the public internet.
 
 ## Run
 
@@ -52,10 +102,21 @@ dotnet test SDM.sln --configuration Release --no-build
 dotnet run --project src/SDM.Desktop/SDM.Desktop.csproj
 ```
 
-The shell displays SDM product metadata and confirms that the foundation is initialized.
+## Registering the native host
 
-## Current limitations
+```powershell
+.\tools\install-native-host.ps1
+```
 
-Stage 1 does not perform network requests, create download files, calculate progress, persist jobs, or integrate with browsers. It has no queue, pause/resume support, media extraction, HLS/DASH handling, installer, updater, system tray, or finished production interface.
+This writes `com.sdm.host` under `HKCU` for Chrome, Edge, and Brave, pointing at the built
+host. `tools\send-native-message.ps1` exercises it without a browser.
 
-See [roadmap](docs/roadmap.md) for the phase-by-phase plan, and [product scope](docs/product-scope.md), [architecture](docs/architecture.md), and the [architecture decision records](docs/decisions/) for the decisions that constrain later stages.
+## Documentation
+
+[Roadmap](docs/roadmap.md) — the phase-by-phase plan, and the state of each phase.
+[Product scope](docs/product-scope.md) · [Architecture](docs/architecture.md) ·
+[Decision records](docs/decisions/)
+
+## License
+
+[MIT](LICENSE).

@@ -366,8 +366,8 @@ work.
 
 | Decision | Why it matters | Status |
 |---|---|---|
-| License | FFmpeg is LGPL/GPL depending on build; shipping its binaries constrains the choice. Decide before Track D. | Open |
-| Host ↔ app IPC | Named pipe vs. loopback HTTP. Locks in at Phase 4.1. | Open |
+| License | FFmpeg is LGPL/GPL depending on build; shipping its binaries constrains the choice. | **Resolved: MIT.** FFmpeg and yt-dlp are run as separate executables rather than linked, so their terms apply to their own binaries. Revisit only if either is ever linked into the application itself. |
+| Host ↔ app IPC | Named pipe vs. loopback HTTP. Locks in at Phase 4.1. | **Resolved: a named pipe** scoped to the current user. No port, unreachable from the network, and restricted by the operating system. |
 | Installer technology | MSIX vs. Inno Setup. Affects native-host registration. | Open |
 | Smart App Control | Was enforced on the dev machine and refused to load locally built assemblies, so neither the app nor most tests could run there. Turned off; all 39 tests and the application now run locally. | Resolved |
 

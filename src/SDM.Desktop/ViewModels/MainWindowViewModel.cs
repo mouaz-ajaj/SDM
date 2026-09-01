@@ -279,18 +279,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void ToggleDetail() => IsDetailOpen = !IsDetailOpen;
 
+    /// <summary>
+    /// Clears the rows the user is done with. This used to take everything that was not
+    /// running — which included paused and failed transfers — and delete their partial
+    /// files with it, so a transfer stopped at 90% was destroyed, without confirmation,
+    /// by a button promising to clear what had finished.
+    ///
+    /// Throwing a partial transfer away is a deliberate, per-row act: it is the cancel
+    /// button on the row itself. Nothing here touches the disk.
+    /// </summary>
     [RelayCommand]
     private async Task ClearFinishedAsync()
     {
-        foreach (DownloadItemViewModel finished in All.Where(item => !item.IsActive).ToList())
+        foreach (DownloadItemViewModel finished in All.Where(item => item.IsFinished).ToList())
         {
-            // Removing a paused or failed row is the user abandoning it, so its partial
-            // file goes too rather than lingering in the download folder for ever.
-            if (!finished.IsCompleted)
-            {
-                finished.DiscardPartial();
-            }
-
             Untrack(finished);
             await finished.ForgetAsync();
             finished.Dispose();
