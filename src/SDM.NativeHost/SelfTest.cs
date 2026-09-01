@@ -15,10 +15,14 @@ internal static class SelfTest
         bool reachable = await CheckApplicationAsync();
 
         Report("Message framing", framing);
-        Report("SDM reachable", reachable);
 
         // A missing application is not a failure of the host: the bridge is installed
-        // correctly, SDM simply is not running yet.
+        // correctly, SDM simply is not running yet. Reporting that as "FAIL" made a sound
+        // installation look broken, which is the opposite of what a self test is for.
+        Console.Error.WriteLine(reachable
+            ? "ok    SDM reachable"
+            : "--    SDM is not running. The bridge is installed; start SDM and it will answer.");
+
         return framing ? 0 : 1;
     }
 

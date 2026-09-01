@@ -373,13 +373,35 @@ IPC decided: a named pipe scoped to the current user. The host starts SDM when i
 not running and never transfers anything itself, so there is one engine however many
 browsers are connected.
 
-### Phase 4.2 — Minimal extension: "Send to SDM"
+### Phase 4.2 — Minimal extension: "Send to SDM" — DONE
 
 **Scope:** `extension/` folder, MV3 manifest, background service worker, a right-click
 context menu on links.
 
 **Acceptance:** right-click any link in Chrome → "Download with SDM" → the job appears
 in the running app within a second.
+
+The extension id is **pinned** rather than left to Chrome. An unpacked extension's id is
+derived from the folder it was loaded from, so moving the repository would change it and
+silently break the host registration — and the browser reports that only as "host not
+found". `manifest.json` therefore carries the public half of a keypair, which fixes the id
+at `efcijjodjgojhelobljfkbigkndfeobe` on every machine and after every reload. The private
+half is deliberately outside the repository, in `%LOCALAPPDATA%\SDM\keys`; it is needed
+only to pack a `.crx` with this same id.
+
+Verified end to end without a browser, since Chrome only has to reproduce what the host
+already does: the id derived from the shipped manifest matches the one registered in
+`allowed_origins`, the self test passes both checks, and a framed download request reached
+the engine — `Browser handed over …` at 17:13:44.038, `Completed …Downloads\Documents\README`
+at 17:13:44.922, sorted by content type since the URL has no extension.
+
+**Fixed here:** the bridge answered "accepted" to a request that arrived while SDM was
+closing, and then dropped it — the application detaches its handler before disposing the
+bridge. The extension would have reported a download that never existed. Seen for real
+during this phase, and now refused with an error instead.
+
+**Still needs a person:** loading the folder once at `chrome://extensions`. Nothing in this
+repository can do that.
 
 ### Phase 4.3 — Intercept browser downloads
 

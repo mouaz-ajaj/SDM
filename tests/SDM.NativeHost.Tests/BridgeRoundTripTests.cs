@@ -128,6 +128,30 @@ public sealed class BridgeRoundTripTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Download_IsRefusedWhenNothingIsListening()
+    {
+        // The application detaches its handler before it disposes the bridge, so a link
+        // arriving while SDM is closing used to be answered "accepted" and then dropped:
+        // the extension reported a download that never existed. Seen for real, once.
+        await using NamedPipeBrowserBridge closing = new(
+            new StubApplicationInfo(),
+            NullLogger<NamedPipeBrowserBridge>.Instance,
+            $"sdm.test.{Guid.NewGuid():N}");
+
+        await closing.StartAsync(TestContext.Current.CancellationToken);
+
+        BridgeReply reply = await new BridgeClient(
+                connectTimeout: TimeSpan.FromSeconds(5),
+                startApplication: () => false,
+                pipeName: closing.Address[@"\\.\pipe\".Length..])
+            .SendAsync(
+                new BridgeMessage { Type = BridgeProtocol.Download, Url = "https://example.test/file.bin" },
+                TestContext.Current.CancellationToken);
+
+        Assert.Equal(BridgeProtocol.Error, reply.Type);
+    }
+
+    [Fact]
     public void Address_NamesAPipeScopedToThisUser()
     {
         // A machine-wide pipe would let another signed-in user queue downloads here.

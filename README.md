@@ -44,12 +44,14 @@ It is under active development. What works and what does not is listed plainly b
 - A native messaging host (`SDM.NativeHost`) speaking Chrome's framing over stdin/stdout
 - A named pipe to the running application, restricted to the current user; the host never
   downloads anything itself, so there is one engine however many browsers are connected
+- A Chrome extension: right-click a link, "Download with SDM", and it appears in the app,
+  which starts if it is not already running. See [extension/](extension/)
 
 ## What does not exist yet
 
-- **The browser extension.** The host and the bridge are built and proven end to end, but
-  nothing has been published for Chrome to install, so downloads are not yet intercepted
-  from the browser. See Track C in the [roadmap](docs/roadmap.md).
+- **Interception of the browser's own downloads.** Right-clicking a link and choosing
+  "Download with SDM" works; clicking a download link still downloads in the browser.
+  See Track C in the [roadmap](docs/roadmap.md).
 - **Video.** No media detection, quality selection, HLS/DASH, or muxing.
 - **A speed limit**, scheduling, clipboard monitoring, notifications, and a tray icon.
 - **Packaging:** no installer, code signing, or updater.
@@ -93,7 +95,7 @@ dotnet build SDM.sln --configuration Release --no-restore
 dotnet test  SDM.sln --configuration Release --no-build
 ```
 
-Warnings are errors here, and the suite is 153 tests. Tests that need a server run against
+Warnings are errors here, and the suite is 156 tests. Tests that need a server run against
 a local `HttpListener`, never the public internet.
 
 ## Run
@@ -110,6 +112,10 @@ dotnet run --project src/SDM.Desktop/SDM.Desktop.csproj
 
 This writes `com.sdm.host` under `HKCU` for Chrome, Edge, and Brave, pointing at the built
 host. `tools\send-native-message.ps1` exercises it without a browser.
+
+Then load the extension: `chrome://extensions` → **Developer mode** → **Load unpacked** →
+choose [extension/](extension/). Its id is fixed by a key in its manifest, so the
+registration above already names it and keeps working after a reload or a move.
 
 ## Documentation
 

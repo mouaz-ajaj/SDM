@@ -8,17 +8,22 @@
     administrator, and a download manager has no business writing machine-wide keys.
 
 .PARAMETER ExtensionId
-    The extension allowed to talk to the host. Chrome refuses any other caller, so this
-    is the single most important value here — an installation with the placeholder id
-    will register cleanly and then never connect.
+    The extension allowed to talk to the host. Chrome refuses every other caller, so this
+    is the single most important value here — a wrong id registers cleanly and then never
+    connects.
+
+    The default is SDM's own id, and it is fixed rather than guessed: extension/manifest.json
+    carries the matching public key, so Chrome derives this same id however often the
+    extension is reloaded and wherever the folder is moved. Pass this parameter only when
+    running a differently-keyed build.
 
 .EXAMPLE
-    .\install-native-host.ps1 -ExtensionId abcdefghijklmnopabcdefghijklmnop
+    .\install-native-host.ps1
 #>
 [CmdletBinding()]
 param(
     [string] $HostPath = (Join-Path $PSScriptRoot '..\src\SDM.Desktop\bin\Release\net10.0\SDM.NativeHost.exe'),
-    [string] $ExtensionId = 'REPLACE_WITH_EXTENSION_ID',
+    [string] $ExtensionId = 'efcijjodjgojhelobljfkbigkndfeobe',
     [switch] $Uninstall
 )
 
@@ -45,8 +50,10 @@ if ($Uninstall) {
 $resolved = (Resolve-Path $HostPath).Path
 if (-not (Test-Path $resolved)) { throw "SDM.NativeHost.exe was not found at $resolved. Build the solution first." }
 
-if ($ExtensionId -eq 'REPLACE_WITH_EXTENSION_ID') {
-    Write-Warning 'No extension id given. The host will register but no extension will be allowed to talk to it.'
+# A Chrome extension id is thirty-two letters from a to p. Anything else registers happily
+# and then refuses every connection, with the browser reporting only "host not found".
+if ($ExtensionId -notmatch '^[a-p]{32}$') {
+    Write-Warning "'$ExtensionId' is not a valid extension id. The host will register, and no extension will be able to talk to it."
 }
 
 $manifestPath = Join-Path (Split-Path $resolved) "$hostName.json"

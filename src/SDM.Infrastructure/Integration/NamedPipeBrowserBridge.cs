@@ -181,8 +181,18 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
             return BridgeReply.Failed("Only http and https addresses can be downloaded.");
         }
 
+        // Nothing is listening once the application has begun closing: ShutdownAsync
+        // detaches its handler before disposing the bridge, and a request arriving in that
+        // window was answered "accepted" and then dropped. The extension would have told
+        // the user the download had started, and no download ever existed.
+        if (DownloadRequested is not { } handover)
+        {
+            _logger.LogWarning("Refused {Url}: SDM is closing.", source);
+            return BridgeReply.Failed("SDM is closing and cannot take the download.");
+        }
+
         _logger.LogInformation("Browser handed over {Url}.", source);
-        DownloadRequested?.Invoke(this, message with { Url = source.AbsoluteUri });
+        handover(this, message with { Url = source.AbsoluteUri });
 
         return BridgeReply.Accepted(source.AbsoluteUri);
     }
