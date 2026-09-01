@@ -66,6 +66,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [NotifyPropertyChangedFor(nameof(IsResumable))]
     [NotifyPropertyChangedFor(nameof(ShowsProgress))]
     [NotifyPropertyChangedFor(nameof(StatusText))]
+    [NotifyPropertyChangedFor(nameof(PercentageText))]
     [NotifyCanExecuteChangedFor(nameof(CancelCommand))]
     [NotifyCanExecuteChangedFor(nameof(PauseCommand))]
     [NotifyCanExecuteChangedFor(nameof(ResumeCommand))]
@@ -96,6 +97,14 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusText))]
     private string _connectionsText = string.Empty;
+
+    /// <summary>
+    /// Every byte has arrived and the file is being checked and moved into place. Still
+    /// Running as far as the list is concerned, but no longer downloading.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StatusText))]
+    private bool _isVerifying;
 
     /// <summary>Documents, Video, Programs — what the file was sorted as.</summary>
     [ObservableProperty]
@@ -237,12 +246,20 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     public bool ShowsProgress => IsActive || IsPaused;
 
-    public string PercentageText => Percentage.ToString("0", CultureInfo.CurrentCulture) + "%";
+    /// <summary>
+    /// Rounded down, not to nearest, while the transfer is still running: 99.6% rounds to
+    /// "100%", and a row reading 100% with a live speed beside it looks stuck rather than
+    /// nearly done. Only a finished transfer is allowed to say 100.
+    /// </summary>
+    public string PercentageText => IsCompleted
+        ? "100%"
+        : Math.Floor(Percentage).ToString("0", CultureInfo.CurrentCulture) + "%";
 
     /// <summary>One word for the table's status column, where the long detail will not fit.</summary>
     public string StatusText => Status switch
     {
         DownloadStatus.Pending => "Queued",
+        DownloadStatus.Running when IsVerifying => "Verifying",
         DownloadStatus.Running => string.IsNullOrEmpty(ConnectionsText) ? "Downloading" : ConnectionsText,
         DownloadStatus.Paused => "Paused",
         DownloadStatus.Completed => "Complete",
@@ -263,6 +280,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             Planned = OnPlanned,
             Retrying = OnRetry,
             Started = OnStarted,
+            Verifying = OnVerifying,
         };
 
         try
@@ -571,6 +589,21 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         _lastTimestamp = Stopwatch.GetTimestamp();
     }
 
+    /// <summary>
+    /// The bytes are all in and the file is being checked and moved into place. The speed
+    /// and the estimate go now rather than at the end: both stopped meaning anything the
+    /// moment the last byte arrived, and leaving them on screen is what made a transfer
+    /// waiting on the disk look like one that had stalled at 100%.
+    /// </summary>
+    private void OnVerifying()
+    {
+        IsVerifying = true;
+        Detail = "Verifying…";
+        SpeedText = string.Empty;
+        RemainingText = string.Empty;
+        _bytesPerSecond = 0;
+    }
+
     private void OnProgress(DownloadProgress progress)
     {
         Status = DownloadStatus.Running;
@@ -618,6 +651,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     {
         Status = status;
         Detail = detail;
+        IsVerifying = false;
         IsIndeterminate = false;
         SpeedText = string.Empty;
         RemainingText = string.Empty;

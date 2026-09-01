@@ -36,6 +36,64 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAsync_DoesNotPresentAShortFileAsFinished()
+    {
+        // The question this answers: if the server stops half way, does SDM hand over a
+        // broken file with a green tick? A truncated download must never reach the
+        // destination name, because from that moment nothing distinguishes it from a
+        // complete one.
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        await Assert.ThrowsAnyAsync<DownloadFailedException>(() => engine.DownloadAsync(
+            new DownloadRequest(server.Url("truncated.bin"), _workingDirectory),
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.False(
+            File.Exists(Path.Combine(_workingDirectory, "truncated.bin")),
+            "A half-delivered file was promoted to its final name.");
+
+        // The partial file stays: the failure is transient, so the retry resumes from
+        // here rather than starting the transfer again.
+        Assert.True(
+            File.Exists(Path.Combine(_workingDirectory, "truncated.bin.part")),
+            "The partial file was thrown away, so the bytes already fetched are lost.");
+    }
+
+    [Fact]
+    public async Task DownloadAsync_AnnouncesVerificationBeforeTheFileTakesItsRealName()
+    {
+        // The row stops saying "Downloading" at this point. If the callback fired after
+        // the move, the interface would have nothing to show during the pause that a
+        // large file spends being flushed and scanned — which is what made a finishing
+        // transfer look like a stalled one.
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        bool destinationExistedWhenVerifying = true;
+        bool verified = false;
+
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(server.Url("payload.bin"), _workingDirectory),
+            new DownloadCallbacks
+            {
+                Verifying = () =>
+                {
+                    verified = true;
+                    destinationExistedWhenVerifying =
+                        File.Exists(Path.Combine(_workingDirectory, "payload.bin"));
+                },
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(verified, "The transfer finished without ever announcing verification.");
+        Assert.False(destinationExistedWhenVerifying);
+        Assert.True(File.Exists(result.DestinationPath));
+    }
+
+    [Fact]
     public async Task DownloadAsync_ReportsProgressRepeatedlyAndEndsAtTheFullLength()
     {
         using LocalHttpServer server = new(ServeAsync);
@@ -640,6 +698,16 @@ public sealed class HttpDownloadEngineTests : IDisposable
                 context.Response.AddHeader("Content-Disposition", "attachment; filename=\"../../escaped.txt\"");
                 context.Response.ContentLength64 = _small.Length;
                 await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
+                break;
+
+            case "/truncated.bin":
+                // Promises the whole file and delivers half of it. A server can do this
+                // by crashing, by a proxy giving up, or by lying.
+                context.Response.ContentLength64 = _payload.Length;
+                await context.Response.OutputStream.WriteAsync(
+                    _payload.AsMemory(0, _payload.Length / 2), cancellationToken);
+                await context.Response.OutputStream.FlushAsync(cancellationToken);
+                context.Response.Abort();
                 break;
 
             case "/rate-limited":

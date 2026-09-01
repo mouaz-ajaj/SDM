@@ -2,6 +2,13 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+
+    <!--
+      The icon Windows itself uses: Explorer, the taskbar, Alt-Tab and the shortcut. It is
+      separate from Window.Icon, which only dresses the window Avalonia draws, and without
+      it the executable carries the generic .NET icon wherever SDM is not running.
+    -->
+    <ApplicationIcon>Assets\Branding\sdm.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\SDM.Core\SDM.Core.csproj" />

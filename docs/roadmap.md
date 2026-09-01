@@ -310,6 +310,33 @@ be opened from SDM at all, and a single row could not be removed.
 - Removing a running transfer stops it first rather than leaving it writing unseen.
 - "Remove from list" leaves the file; only "Remove and delete file" removes it.
 
+### Phase 3.11 — Verify the file, and say so — DONE
+
+Raised by a screenshot: a transfer sat at 100% still labelled "Downloading", with a speed
+beside it, and the question behind it — is anything checked once the bytes stop?
+
+Nothing was. `Complete` renamed the partial file and reported success without ever
+comparing what arrived against what the server said it would send.
+
+**Scope**
+- The partial file is checked before it is promoted: the byte count against
+  `Content-Length`, and the count against the length actually on disk. A short transfer
+  fails as transient, so the partial survives and the retry resumes rather than restarts.
+- A `Verifying` callback, because the gap the screenshot caught is real: on a large file
+  the flush, the move and whatever scans downloads are not instant, and the row used to
+  spend that time claiming to download at a speed that had stopped being true.
+- The percentage is rounded **down** while running. 99.6% displayed as "100%", and a row
+  reading 100% with a live speed looks stuck rather than nearly finished.
+
+**Acceptance**
+- A server that promises a length and delivers half of it never produces a file at the
+  destination name, and its partial file survives.
+- Verification is announced before the file takes its real name, not after.
+
+**Not covered:** HTTP carries no checksum for an arbitrary file, so there is nothing to
+compare the contents against. Only the length is verifiable. A server that sends the right
+number of wrong bytes cannot be caught here.
+
 ### Phase 3.9 — Browser-facing settings (planned)
 
 The browser pane of the settings screen — bridge status, per-browser extension state,

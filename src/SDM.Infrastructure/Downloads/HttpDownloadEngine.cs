@@ -362,6 +362,9 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         FileCategory category,
         DownloadCallbacks? callbacks)
     {
+        callbacks?.Verifying?.Invoke();
+        Verify(partialPath, bytesWritten, totalBytes);
+
         File.Move(partialPath, destination, overwrite: true);
         PartialFile.Delete(partialPath);
 
@@ -369,6 +372,44 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         _logger.LogInformation("Completed {Destination}; {BytesWritten} bytes on disk.", destination, bytesWritten);
 
         return new DownloadResult(destination, bytesWritten) { MediaType = mediaType, Category = category };
+    }
+
+    /// <summary>
+    /// Checks the transfer before the partial file is promoted to the real name.
+    ///
+    /// HTTP carries no checksum for an arbitrary file, so there is nothing to compare the
+    /// contents against — but the server did say how many bytes it was sending, and that
+    /// much can be held to. A stream that ends early looks exactly like a stream that
+    /// ended on time, so without this a truncated file was renamed, reported as finished
+    /// and its partial deleted, and the first thing to notice would have been the user
+    /// opening a broken archive.
+    ///
+    /// A short transfer is transient on purpose: the partial file survives, so the retry
+    /// resumes from where it stopped rather than starting the download again.
+    /// </summary>
+    private static void Verify(string partialPath, long bytesWritten, long? totalBytes)
+    {
+        if (totalBytes is { } expected && bytesWritten != expected)
+        {
+            throw new DownloadFailedException(
+                $"The server promised {expected} bytes and sent {bytesWritten}.",
+                statusCode: null,
+                retryAfter: null,
+                isTransient: true);
+        }
+
+        // What was counted is not proof of what landed: a write can fail after the bytes
+        // were read, and a segmented transfer writes at offsets rather than sequentially.
+        long onDisk = new FileInfo(partialPath).Length;
+
+        if (onDisk != bytesWritten)
+        {
+            throw new DownloadFailedException(
+                $"{bytesWritten} bytes were received but the file holds {onDisk}.",
+                statusCode: null,
+                retryAfter: null,
+                isTransient: true);
+        }
     }
 
     /// <summary>
