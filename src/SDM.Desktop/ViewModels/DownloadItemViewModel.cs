@@ -310,6 +310,12 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             CategoryBrush = new SolidColorBrush(Color.Parse(CategoryColours.HexFor(result.Category)));
             Percentage = 100;
             IsIndeterminate = false;
+
+            foreach (SegmentViewModel segment in Segments)
+            {
+                segment.MarkComplete();
+            }
+
             SpeedText = string.Empty;
             RemainingText = string.Empty;
             Settle(
@@ -621,8 +627,28 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         _bytesPerSecond = 0;
     }
 
+    /// <summary>
+    /// A row that has settled is final, and a late report must not raise it from the
+    /// dead. The engine reports progress one last time from inside Complete, after the
+    /// file has been moved — and <see cref="Progress{T}"/> posts that to the interface
+    /// thread, so it can arrive *after* the awaited call has already returned and the row
+    /// has been marked complete. It then set the status back to Running, which is why a
+    /// finished download sat at 100% still labelled "Downloading" while its own history
+    /// said "Finished": both were true, in that order.
+    /// </summary>
+    private bool HasSettled => Status
+        is DownloadStatus.Completed
+        or DownloadStatus.Failed
+        or DownloadStatus.Cancelled
+        or DownloadStatus.Paused;
+
     private void OnProgress(DownloadProgress progress)
     {
+        if (HasSettled)
+        {
+            return;
+        }
+
         Status = DownloadStatus.Running;
         IsIndeterminate = progress.TotalBytes is null;
         Percentage = progress.Percentage ?? 0;

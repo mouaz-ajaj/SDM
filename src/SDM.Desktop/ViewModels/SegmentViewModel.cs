@@ -39,6 +39,17 @@ public sealed partial class SegmentViewModel : ObservableObject
         StateText = progress.IsComplete ? "Done" : "Running";
     }
 
+    /// <summary>
+    /// Called when the transfer as a whole finished. Segment reports are throttled, so
+    /// the last few bytes of a part often arrive with no report left to carry them: the
+    /// file was complete while one connection still read "Running".
+    /// </summary>
+    public void MarkComplete()
+    {
+        Percentage = 100;
+        StateText = "Done";
+    }
+
     private static string FormatBytes(long bytes)
     {
         double value = bytes;

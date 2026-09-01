@@ -288,9 +288,23 @@
     <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
   </Style>
 
+  <!--
+    Fluent's own disabled style paints ContentPresenter#PART_ContentPresenter, and it goes
+    on matching inside a replaced template because the part still carries the name the
+    theme looks for. So the Add button, disabled with an empty address box, wore a pale
+    grey slab over the shell underneath it. Overriding the same part is what undoes it;
+    renaming the part instead would stop ContentControl from finding its own content.
+  -->
+  <Style Selector="Button.primary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
   <Style Selector="Button.primary:disabled">
     <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
     <Setter Property="Cursor" Value="Arrow" />
+    <Setter Property="Opacity" Value="0.55" />
   </Style>
 
   <!-- Secondary button: the quieter half of a pair, never competing with the primary -->
@@ -326,6 +340,16 @@
   <Style Selector="Button.secondary:disabled">
     <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
     <Setter Property="Cursor" Value="Arrow" />
+  </Style>
+
+  <!-- The same Fluent disabled slab, kept off every button that owns its template. -->
+  <Style Selector="Button.secondary:disabled /template/ ContentPresenter#PART_ContentPresenter,
+                   Button.ghost:disabled /template/ ContentPresenter#PART_ContentPresenter,
+                   Button.iconGhost:disabled /template/ ContentPresenter#PART_ContentPresenter,
+                   Button.iconDanger:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
   </Style>
 
   <!-- Settings controls -->
