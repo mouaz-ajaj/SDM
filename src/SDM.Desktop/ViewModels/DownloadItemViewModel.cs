@@ -106,6 +106,17 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [NotifyPropertyChangedFor(nameof(StatusText))]
     private bool _isVerifying;
 
+    /// <summary>
+    /// Waiting out the backoff before another attempt. The row stays Pending, because it
+    /// genuinely is waiting for its turn to run — but "queued behind other transfers" and
+    /// "this one just failed and is about to try again" are not the same thing, and the
+    /// status column said "Queued" for both while the reason sat out of sight in the
+    /// detail panel.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StatusText))]
+    private string _retryText = string.Empty;
+
     /// <summary>Documents, Video, Programs — what the file was sorted as.</summary>
     [ObservableProperty]
     private string _categoryName = string.Empty;
@@ -258,6 +269,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     /// <summary>One word for the table's status column, where the long detail will not fit.</summary>
     public string StatusText => Status switch
     {
+        DownloadStatus.Pending when RetryText.Length > 0 => RetryText,
         DownloadStatus.Pending => "Queued",
         DownloadStatus.Running when IsVerifying => "Verifying",
         DownloadStatus.Running => string.IsNullOrEmpty(ConnectionsText) ? "Downloading" : ConnectionsText,
@@ -436,6 +448,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
         Status = DownloadStatus.Pending;
         Detail = "Queued";
+        RetryText = string.Empty;
         IsIndeterminate = true;
 
         await RunAsync();
@@ -513,6 +526,9 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
     private void OnPlanned(DownloadPlan plan)
     {
+        // The server answered, so whatever the last attempt failed on is over.
+        RetryText = string.Empty;
+
         DestinationPath = plan.DestinationPath;
         FileName = Path.GetFileName(plan.DestinationPath);
         ServerSupportsResume = plan.ServerSupportsResume;
@@ -576,6 +592,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private void OnRetry(DownloadRetry retry)
     {
         Status = DownloadStatus.Pending;
+        RetryText = $"Retry {retry.Attempt}/{retry.MaximumAttempts}";
         SpeedText = string.Empty;
         RemainingText = string.Empty;
         Detail = $"{retry.Reason} — retrying in {retry.Delay.TotalSeconds:0}s "
@@ -652,6 +669,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         Status = status;
         Detail = detail;
         IsVerifying = false;
+        RetryText = string.Empty;
         IsIndeterminate = false;
         SpeedText = string.Empty;
         RemainingText = string.Empty;
