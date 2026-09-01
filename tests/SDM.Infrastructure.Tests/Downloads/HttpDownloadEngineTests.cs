@@ -15,6 +15,7 @@ public sealed class HttpDownloadEngineTests : IDisposable
     private readonly byte[] _payload = CreateDeterministicPayload(PayloadSize);
     private readonly byte[] _small = CreateDeterministicPayload(4096);
     private readonly string _workingDirectory = Directory.CreateTempSubdirectory("sdm-tests-").FullName;
+    private readonly Dictionary<string, string> _seenHeaders = [];
 
     [Fact]
     public async Task DownloadAsync_WritesTheServedBytesToDisk()
@@ -78,10 +79,57 @@ public sealed class HttpDownloadEngineTests : IDisposable
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
 
         DownloadProbe probe = await engine.ProbeAsync(
-            server.Url("thumbnail"), TestContext.Current.CancellationToken);
+            server.Url("thumbnail"), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("thumbnail.jpg", probe.FileName);
         Assert.Equal(FileCategory.Images, probe.Category);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_CarriesTheBrowserSessionToTheServer()
+    {
+        // Taking a download away from the browser is only an improvement if it arrives as
+        // the same visitor. Without the session the server answers a stranger, and the
+        // sign-in page is saved under the name of the file that was wanted.
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadResult result = await engine.DownloadAsync(
+            new DownloadRequest(
+                server.Url("members-only.bin"),
+                _workingDirectory,
+                context: new RequestContext
+                {
+                    Cookie = "session=abc123",
+                    Referrer = "https://example.test/library",
+                    UserAgent = "Mozilla/5.0 (SDM test)",
+                }),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(_small.Length, result.BytesWritten);
+        Assert.Equal("session=abc123", _seenHeaders["Cookie"]);
+        Assert.Equal("https://example.test/library", _seenHeaders["Referer"]);
+        Assert.Equal("Mozilla/5.0 (SDM test)", _seenHeaders["User-Agent"]);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_WithoutTheSessionIsRefusedRatherThanSavingTheRefusal()
+    {
+        // The other half of the same guarantee: a 403 has to fail the transfer. Writing
+        // the body of a refusal to disk under the wanted file's name is the failure mode
+        // this whole feature exists to prevent.
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadFailedException failure = await Assert.ThrowsAsync<DownloadFailedException>(
+            () => engine.DownloadAsync(
+                new DownloadRequest(server.Url("members-only.bin"), _workingDirectory),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(403, failure.StatusCode);
+        Assert.False(File.Exists(Path.Combine(_workingDirectory, "members-only.bin")));
     }
 
     [Fact]
@@ -420,7 +468,7 @@ public sealed class HttpDownloadEngineTests : IDisposable
 
         // The URL says "opaque-id"; only the server knows it is a PDF called something else.
         DownloadProbe probe = await engine.ProbeAsync(
-            server.Url("opaque-id"), TestContext.Current.CancellationToken);
+            server.Url("opaque-id"), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("quarterly report.pdf", probe.FileName);
         Assert.Equal(FileCategory.Documents, probe.Category);
@@ -435,9 +483,9 @@ public sealed class HttpDownloadEngineTests : IDisposable
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
 
         DownloadProbe resumable = await engine.ProbeAsync(
-            server.Url("resumable.bin"), TestContext.Current.CancellationToken);
+            server.Url("resumable.bin"), cancellationToken: TestContext.Current.CancellationToken);
         DownloadProbe plain = await engine.ProbeAsync(
-            server.Url("ignores-range.bin"), TestContext.Current.CancellationToken);
+            server.Url("ignores-range.bin"), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(PayloadSize, resumable.TotalBytes);
         Assert.True(resumable.SupportsResume);
@@ -452,7 +500,7 @@ public sealed class HttpDownloadEngineTests : IDisposable
         IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
 
         DownloadFailedException exception = await Assert.ThrowsAsync<DownloadFailedException>(
-            () => engine.ProbeAsync(server.Url("missing.bin"), TestContext.Current.CancellationToken));
+            () => engine.ProbeAsync(server.Url("missing.bin"), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(404, exception.StatusCode);
     }
@@ -760,6 +808,23 @@ public sealed class HttpDownloadEngineTests : IDisposable
             case "/archive.zip":
                 // The name says zip and the server says "bytes". The name wins.
                 context.Response.ContentType = "application/octet-stream";
+                context.Response.ContentLength64 = _small.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
+                break;
+
+            case "/members-only.bin":
+                // Stands in for anything behind a login: without the session it answers
+                // the way a real site does — with a page, not the file.
+                if (context.Request.Headers["Cookie"] != "session=abc123")
+                {
+                    context.Response.StatusCode = (int)HttpStatusCode.Forbidden;
+                    break;
+                }
+
+                _seenHeaders["Cookie"] = context.Request.Headers["Cookie"] ?? string.Empty;
+                _seenHeaders["Referer"] = context.Request.Headers["Referer"] ?? string.Empty;
+                _seenHeaders["User-Agent"] = context.Request.Headers["User-Agent"] ?? string.Empty;
+
                 context.Response.ContentLength64 = _small.Length;
                 await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
                 break;

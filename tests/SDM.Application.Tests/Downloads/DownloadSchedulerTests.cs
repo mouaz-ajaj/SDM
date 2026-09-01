@@ -149,6 +149,7 @@ public sealed class DownloadSchedulerTests
             string address,
             DownloadCallbacks? callbacks = null,
             DownloadDestination? destination = null,
+            RequestContext? context = null,
             CancellationToken cancellationToken = default)
         {
             lock (_sync)

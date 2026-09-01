@@ -25,6 +25,7 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
         string address,
         DownloadCallbacks? callbacks = null,
         DownloadDestination? destination = null,
+        RequestContext? context = null,
         CancellationToken cancellationToken = default)
     {
         SemaphoreSlim host = HostSlotsFor(address);
@@ -43,7 +44,7 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
                 // Only now is the transfer really beginning; the caller has been showing it
                 // as queued until this point.
                 callbacks?.Started?.Invoke();
-                return await _startDownload.ExecuteAsync(address, callbacks, destination, cancellationToken);
+                return await _startDownload.ExecuteAsync(address, callbacks, destination, context, cancellationToken);
             }
             finally
             {

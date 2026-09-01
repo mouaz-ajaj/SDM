@@ -42,16 +42,48 @@ with this same id. Losing it costs nothing today: publishing through the Chrome 
 uses the store's own key, and generating a new keypair only means a new id and one more
 run of step 2.
 
+## Taking over the browser's downloads
+
+On by default: someone installing a download manager's extension is asking for its
+download manager. The options page turns it off, and the change applies to the next click
+rather than the next restart.
+
+**A download is paused, not cancelled, until SDM has accepted it.** If the host is
+unregistered, the path is stale, or SDM refuses, the browser's own download is resumed and
+Chrome finishes it, with a notification saying why. Cancelling first would mean one broken
+component silently breaks every download in the browser.
+
+Only `http` and `https` are taken over. A `blob:` or `data:` URL exists nowhere but inside
+the page that created it, and handing one to SDM would cancel a download that nothing else
+can then perform.
+
+## The session travels with the download
+
+Chrome sends your cookies with every download it makes. SDM fetching the same URL from
+another process is a different visitor, so the extension sends the cookie header, the
+referring page and the browser's user-agent along with the URL. Without them a file behind
+a login comes back as the sign-in page, saved under the name of the file you wanted.
+
+SDM holds that context in memory for the transfer and **never writes it to disk**. A
+cookie is a credential; a list of downloads is not the place to keep live sessions. The
+cost is that a transfer resumed after restarting SDM goes without it and may fail — which
+is the better of the two failures.
+
 ## Permissions, and why each one is here
 
 | Permission | Why |
 |---|---|
-| `contextMenus` | The right-click entry. This is the feature. |
+| `contextMenus` | The right-click entries. |
 | `nativeMessaging` | The only way to reach a program outside the browser. |
-| `notifications` | Failures are silent otherwise. Nothing is shown on success — SDM's own window is where a transfer belongs, and a notification per link would be noise. |
+| `downloads` | Pausing, cancelling and resuming the browser's own downloads. |
+| `cookies` | The session that makes a protected download work at all. |
+| `storage` | Remembering the one setting on the options page. |
+| `notifications` | Failures are silent otherwise. Nothing is shown on success — SDM's own window is where a transfer belongs, and a notification per download would be noise. |
+| `<all_urls>` | `chrome.cookies` is per-site: reading the cookies for a download means host access to the site it came from, and a download can come from anywhere. |
 
-No `host_permissions`, no content scripts, no `tabs`: the extension never reads a page. It
-sees the URL of the link that was right-clicked and the address of the tab it was in.
+No content scripts and no `tabs`: the extension never reads the contents of a page. It
+sees the URL being downloaded, the address of the tab it came from, and that site's
+cookies.
 
 ## When it does not work
 

@@ -32,6 +32,13 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private readonly Guid _id;
     private readonly string _address;
     private readonly DownloadDestination? _destination;
+
+    /// <summary>
+    /// The browser session this transfer came from, when it came from one. Held in memory
+    /// only and never written to the database: a cookie is a credential, and a list of
+    /// downloads is not the place to keep live sessions on disk.
+    /// </summary>
+    private readonly RequestContext? _context;
     private readonly DateTimeOffset _createdAt;
 
     private CancellationTokenSource _cancellation = new();
@@ -147,9 +154,11 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         Guid id,
         string address,
         DateTimeOffset createdAt,
-        DownloadDestination? destination = null)
+        DownloadDestination? destination = null,
+        RequestContext? context = null)
     {
         _destination = destination;
+        _context = context;
         _scheduler = scheduler;
         _repository = repository;
         _shell = shell;
@@ -166,7 +175,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         ISystemShell shell,
         ILogger logger,
         string address,
-        DownloadDestination? destination = null)
+        DownloadDestination? destination = null,
+        RequestContext? context = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(repository);
@@ -176,7 +186,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
         DownloadItemViewModel item = new(
             scheduler, repository, shell, logger,
-            Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow, destination);
+            Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow, destination, context);
 
         item.Persist();
         return item;
@@ -298,7 +308,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         try
         {
             DownloadResult result = await _scheduler.EnqueueAsync(
-                _address, callbacks, _destination, _cancellation.Token);
+                _address, callbacks, _destination, _context, _cancellation.Token);
 
             DestinationPath = result.DestinationPath;
             FileName = Path.GetFileName(result.DestinationPath);

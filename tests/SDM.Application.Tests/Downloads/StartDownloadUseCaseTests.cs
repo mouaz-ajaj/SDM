@@ -183,7 +183,8 @@ public sealed class StartDownloadUseCaseTests
 
         public void DiscardPartial(string destinationPath) => Discarded = destinationPath;
 
-        public Task<DownloadProbe> ProbeAsync(Uri source, CancellationToken cancellationToken = default) =>
+        public Task<DownloadProbe> ProbeAsync(
+            Uri source, RequestContext? context = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(new DownloadProbe(
                 "file.bin", 1024, "application/octet-stream", FileCategory.Other, true));
     }

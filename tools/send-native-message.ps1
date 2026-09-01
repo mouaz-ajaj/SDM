@@ -24,6 +24,9 @@ param(
     [string] $Type = 'ping',
     [string] $Url,
     [string] $FileName,
+    [string] $Cookie,
+    [string] $Referrer,
+    [string] $UserAgent,
     [int] $TimeoutSeconds = 30
 )
 
@@ -34,6 +37,9 @@ $resolved = (Resolve-Path $HostPath).Path
 $message = @{ type = $Type }
 if ($Url) { $message.url = $Url }
 if ($FileName) { $message.fileName = $FileName }
+if ($Cookie) { $message.cookie = $Cookie }
+if ($Referrer) { $message.referrer = $Referrer }
+if ($UserAgent) { $message.userAgent = $UserAgent }
 
 $json = $message | ConvertTo-Json -Compress
 $payload = [Text.Encoding]::UTF8.GetBytes($json)

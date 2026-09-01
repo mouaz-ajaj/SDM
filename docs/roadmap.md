@@ -432,20 +432,47 @@ any thread, so something awaited was never going to complete.
 seconds before. Closing during a live transfer still exits at once and keeps the partial
 file for resume.
 
-### Phase 4.3 — Intercept browser downloads
+### Phase 4.3 + 4.4 — Intercept browser downloads, with the session — DONE
 
-**Scope:** `chrome.downloads` interception — cancel the browser's download, hand the
-URL to SDM. An options page with a master toggle.
+**Done as one phase, against the plan, and deliberately.** Interception without the
+session makes SDM worse than the browser it replaces: Chrome sends your cookies with every
+download, and SDM fetching the same URL from another process is a different visitor. A
+file behind a login is not a file at a URL — it is a file at that URL *for whoever is
+signed in* — so a bare request gets the sign-in page, saved under the name of the file
+that was wanted. Shipping 4.3 alone would have turned working downloads into wrong ones.
 
-**Acceptance:** clicking a `.zip` link downloads in SDM, not Chrome. Toggling the
-option off restores normal browser behavior immediately.
+**Scope**
+- `chrome.downloads.onCreated` interception, and an options page with a master toggle
+  read on every download so turning it off applies to the very next click.
+- `RequestContext` — cookie, referer, user-agent — carried from the extension through the
+  host, the pipe, the scheduler and the use case, onto every request the engine makes,
+  including each segment of a split transfer.
 
-### Phase 4.4 — Cookies, referer, user-agent
+**Failure is safe, which is what makes taking over acceptable at all.** The browser's
+download is **paused**, not cancelled, until SDM has answered "accepted". If the bridge is
+broken, the host unregistered, or SDM refuses, the download is resumed and Chrome finishes
+it. Cancelling first would mean one broken component silently breaks every download in the
+browser.
 
-**Scope:** forward the request context so authenticated and referer-gated downloads
-work.
+Only http and https are touched. A `blob:` or `data:` URL exists nowhere but inside the
+page that made it, and handing one over would cancel a download nothing else can perform.
 
-**Acceptance:** a file behind a login downloads successfully in SDM.
+**The context is never persisted.** A cookie is a credential, and writing one to the
+transfer database would turn a list of downloads into a store of live sessions on disk,
+readable by anything running as the user and outliving the download itself. A transfer
+resumed after a restart therefore goes without it and may fail — the better of the two
+failures, and stated here rather than discovered later.
+
+**Acceptance**
+- The engine sends cookie, referer and user-agent, and a 403 without them fails the
+  transfer rather than saving the refusal under the wanted file's name — both tested.
+- Proven end to end against a live server that echoes what it received: sent through the
+  extension's own message shape, the host, the pipe and the engine, `httpbingo.org/headers`
+  returned `Cookie: session=proof-of-cookie`, the referer and the user-agent unchanged.
+
+**Still needs a person:** reloading the extension at `chrome://extensions` — it now asks
+for `downloads`, `cookies` and host access, and Chrome requires that to be accepted by
+hand.
 
 ---
 

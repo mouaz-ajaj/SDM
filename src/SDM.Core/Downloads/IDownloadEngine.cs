@@ -16,7 +16,12 @@ public interface IDownloadEngine
     /// <summary>
     /// Asks the server what a URL is — name, size, type — without downloading the body.
     /// </summary>
-    Task<DownloadProbe> ProbeAsync(Uri source, CancellationToken cancellationToken = default);
+    /// <param name="context">
+    /// The browser session the URL belongs to, when it has one. A protected file answers
+    /// a bare probe with a sign-in page, whose name and size describe the wrong thing.
+    /// </param>
+    Task<DownloadProbe> ProbeAsync(
+        Uri source, RequestContext? context = null, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes the partial file and its metadata for a destination that will not be resumed.</summary>
     void DiscardPartial(string destinationPath);

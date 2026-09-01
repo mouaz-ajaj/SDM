@@ -27,6 +27,7 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
         string address,
         DownloadCallbacks? callbacks = null,
         DownloadDestination? destination = null,
+        RequestContext? context = null,
         CancellationToken cancellationToken = default)
     {
         Uri source = Parse(address);
@@ -34,8 +35,9 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
         // DownloadRequest rejects anything that is not HTTP or HTTPS, with a message the
         // user interface can show as-is.
         DownloadRequest request = destination is null
-            ? new DownloadRequest(source, _downloadFolder.GetPath())
-            : new DownloadRequest(source, destination.Directory, destination.FileName, chosenByUser: true);
+            ? new DownloadRequest(source, _downloadFolder.GetPath(), context: context)
+            : new DownloadRequest(
+                source, destination.Directory, destination.FileName, chosenByUser: true, context: context);
 
         for (int attempt = 1; ; attempt++)
         {
@@ -57,8 +59,12 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
         }
     }
 
+    /// <summary>
+    /// No browser context: probing is only reached from the address box, where the URL was
+    /// typed rather than taken from a page, and so belongs to no session.
+    /// </summary>
     public Task<DownloadProbe> ProbeAsync(string address, CancellationToken cancellationToken = default) =>
-        _engine.ProbeAsync(Parse(address), cancellationToken);
+        _engine.ProbeAsync(Parse(address), context: null, cancellationToken);
 
     public void Discard(string destinationPath) => _engine.DiscardPartial(destinationPath);
 

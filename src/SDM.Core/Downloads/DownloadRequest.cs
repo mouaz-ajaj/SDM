@@ -11,7 +11,8 @@ public sealed record DownloadRequest
         Uri source,
         string destinationDirectory,
         string? preferredFileName = null,
-        bool chosenByUser = false)
+        bool chosenByUser = false,
+        RequestContext? context = null)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -26,6 +27,7 @@ public sealed record DownloadRequest
         DestinationDirectory = Path.GetFullPath(destinationDirectory);
         PreferredFileName = preferredFileName is null ? null : SafeFileName.Sanitize(preferredFileName);
         ChosenByUser = chosenByUser;
+        Context = context is null || context.IsEmpty ? null : context;
     }
 
     public Uri Source { get; }
@@ -41,4 +43,10 @@ public sealed record DownloadRequest
     /// where it was told rather than inventing "name (1)".
     /// </summary>
     public bool ChosenByUser { get; }
+
+    /// <summary>
+    /// The browser session this download belongs to, when it came from one. Null for a
+    /// URL typed into SDM, which belongs to no session at all.
+    /// </summary>
+    public RequestContext? Context { get; }
 }

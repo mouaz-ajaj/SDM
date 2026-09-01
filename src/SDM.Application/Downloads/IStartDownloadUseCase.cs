@@ -19,6 +19,7 @@ public interface IStartDownloadUseCase
         string address,
         DownloadCallbacks? callbacks = null,
         DownloadDestination? destination = null,
+        RequestContext? context = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Asks the server what a URL is, so a save dialog can show its real name.</summary>

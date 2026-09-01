@@ -5,6 +5,10 @@
 // those three disagree, and Chrome's only complaint will be "host not found".
 const HOST = "com.sdm.host";
 
+// Whether SDM takes over the browser's own downloads. Read on every download rather than
+// cached, so turning it off in the options page takes effect on the very next click.
+const TAKEOVER = "takeOverDownloads";
+
 // One entry per kind of thing that can be downloaded, rather than one entry that guesses.
 //
 // A right-click on an image inside a link reports both a link and a source, and the first
@@ -48,38 +52,129 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   const url = info[menu.from];
 
   if (url) {
-    send(url, tab && tab.url);
+    handOver(url, tab && tab.url).then((reply) => {
+      if (!reply.ok) {
+        notify("SDM did not take the download", reply.message);
+      }
+    });
   }
 });
 
-function send(url, referrer) {
-  chrome.runtime.sendNativeMessage(
-    HOST,
-    {
-      type: "download",
-      url: url,
-      fileName: fileNameFrom(url),
-      referrer: referrer,
-    },
-    (reply) => {
+// ---------------------------------------------------------------------------
+// Taking over the browser's own downloads
+// ---------------------------------------------------------------------------
+
+chrome.downloads.onCreated.addListener((item) => {
+  takeOver(item).catch((error) => notify("SDM could not take the download", String(error)));
+});
+
+async function takeOver(item) {
+  if (!(await enabled()) || !canTakeOver(item)) {
+    return;
+  }
+
+  // Paused rather than cancelled, because SDM has not agreed to anything yet. Pausing
+  // stops the bytes immediately but keeps the browser's download alive, so if the handover
+  // fails for any reason the download can simply be resumed and the user loses nothing.
+  // Cancelling first would mean a broken bridge silently breaks every download in Chrome.
+  try {
+    await chrome.downloads.pause(item.id);
+  } catch (error) {
+    // Already finished, or already gone. Either way there is nothing left to take over —
+    // and nothing has been cancelled, so the file the user asked for is still theirs.
+    return;
+  }
+
+  const reply = await handOver(item.finalUrl || item.url, item.referrer);
+
+  if (reply.ok) {
+    await chrome.downloads.cancel(item.id).catch(() => {});
+
+    // Removes the entry from the browser's own download list. Leaving it would show a
+    // cancelled download beside a working one for the same file.
+    await chrome.downloads.erase({ id: item.id }).catch(() => {});
+    return;
+  }
+
+  await chrome.downloads.resume(item.id).catch(() => {});
+  notify("SDM did not take the download", reply.message + " Chrome is downloading it instead.");
+}
+
+// Only what SDM can actually fetch on its own. A blob: or data: URL exists nowhere but
+// inside that page, and handing one over would cancel a download that nothing else can
+// then perform.
+function canTakeOver(item) {
+  const url = item.finalUrl || item.url || "";
+
+  return item.state === "in_progress"
+    && (url.startsWith("https://") || url.startsWith("http://"));
+}
+
+async function enabled() {
+  const stored = await chrome.storage.local.get(TAKEOVER);
+
+  // On by default: someone who installs a download manager's extension is asking for its
+  // download manager. The options page turns it off, and the pause-first handover above
+  // means a failure falls back to Chrome rather than losing the file.
+  return stored[TAKEOVER] !== false;
+}
+
+// ---------------------------------------------------------------------------
+// Talking to SDM
+// ---------------------------------------------------------------------------
+
+async function handOver(url, referrer) {
+  const message = {
+    type: "download",
+    url: url,
+    fileName: fileNameFrom(url),
+    referrer: referrer,
+
+    // What SDM cannot work out for itself. Fetching from another process makes it a
+    // different visitor, and a file behind a login is not a file at a URL — it is a file
+    // at that URL for whoever is signed in.
+    cookie: await cookieHeaderFor(url),
+    userAgent: navigator.userAgent,
+  };
+
+  return await new Promise((resolve) => {
+    chrome.runtime.sendNativeMessage(HOST, message, (reply) => {
       // lastError must be read inside the callback or Chrome logs it as unchecked.
       if (chrome.runtime.lastError) {
         // Chrome could not start the host at all. Nearly always one of three things: the
         // host is not registered, the path in its manifest is wrong, or this extension's
         // id is missing from allowed_origins.
-        notify("SDM could not be reached", chrome.runtime.lastError.message);
+        resolve({ ok: false, message: chrome.runtime.lastError.message });
         return;
       }
 
       if (!reply || reply.type !== "accepted") {
-        notify("SDM refused the download", (reply && reply.message) || "No answer.");
+        resolve({ ok: false, message: (reply && reply.message) || "SDM did not answer." });
+        return;
       }
 
       // Nothing is shown on success on purpose: SDM's own window is the place a transfer
-      // appears, and a notification for every link would be noise the moment this is
+      // appears, and a notification for every download would be noise the moment this is
       // used in earnest.
-    }
-  );
+      resolve({ ok: true, message: "" });
+    });
+  });
+}
+
+// The Cookie header the browser would have sent. httpOnly cookies are included — they are
+// usually the session itself, and they are exactly what a bare request lacks.
+async function cookieHeaderFor(url) {
+  try {
+    const cookies = await chrome.cookies.getAll({ url: url });
+
+    return cookies.length
+      ? cookies.map((cookie) => cookie.name + "=" + cookie.value).join("; ")
+      : undefined;
+  } catch (error) {
+    // No cookie access for this URL. The download may still work; it is not worth
+    // abandoning over.
+    return undefined;
+  }
 }
 
 // The name the browser would have used, so SDM can show something meaningful before the

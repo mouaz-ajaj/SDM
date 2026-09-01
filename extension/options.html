@@ -1,0 +1,69 @@
+<meta charset="utf-8">
+<title>SDM options</title>
+<style>
+  :root { color-scheme: light dark; }
+
+  body {
+    font: 14px/1.55 "Segoe UI", system-ui, sans-serif;
+    margin: 0;
+    padding: 34px 30px;
+    max-width: 620px;
+    background: #0a0f16;
+    color: #f3f7fc;
+  }
+
+  h1 { font-size: 19px; font-weight: 600; margin: 0 0 4px; letter-spacing: .2px; }
+
+  .sub { color: #64798f; font-size: 12.5px; margin: 0 0 26px; }
+
+  .card {
+    background: #111a25;
+    border: 1px solid #1d2a3a;
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 14px;
+  }
+
+  label.row { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
+
+  input[type=checkbox] { margin-top: 3px; width: 16px; height: 16px; accent-color: #1470f0; }
+
+  .title { font-weight: 600; }
+
+  .why { color: #a2b4c9; font-size: 12.5px; margin-top: 5px; }
+
+  .note { color: #64798f; font-size: 12px; margin-top: 16px; }
+
+  code { color: #17b4ff; font-size: 12px; }
+
+  #saved { color: #3ddc97; font-size: 12.5px; height: 18px; margin-top: 4px; }
+</style>
+
+<h1>SDM</h1>
+<p class="sub">Speed Download Manager — browser integration</p>
+
+<div class="card">
+  <label class="row">
+    <input type="checkbox" id="takeover">
+    <span>
+      <span class="title">Download in SDM instead of Chrome</span>
+      <div class="why">
+        Clicking a download link hands it to SDM. Turn this off and Chrome downloads
+        normally again, starting with the next click — nothing else changes.
+      </div>
+    </span>
+  </label>
+  <div id="saved"></div>
+</div>
+
+<p class="note">
+  A download is only taken over once SDM has accepted it. If SDM cannot be reached, the
+  browser's own download is resumed rather than lost, and a notification says why.
+</p>
+
+<p class="note">
+  Right-clicking a link, image, video or audio always offers <code>Download … with SDM</code>,
+  whether or not this setting is on.
+</p>
+
+<script src="options.js"></script>

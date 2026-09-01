@@ -91,7 +91,8 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             : await StartAsync(request, existing, lease, callbacks, idle, linked.Token, cancellationToken);
     }
 
-    public async Task<DownloadProbe> ProbeAsync(Uri source, CancellationToken cancellationToken = default)
+    public async Task<DownloadProbe> ProbeAsync(
+        Uri source, RequestContext? context = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -103,7 +104,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         // name from Content-Disposition, the size from Content-Range, and proof of
         // range support from the status code itself.
         using HttpResponseMessage response = await SendAsync(
-            source, 0, 0, validator: null, linked.Token, cancellationToken);
+            source, 0, 0, validator: null, context, linked.Token, cancellationToken);
 
         EnsureSuccess(response);
 
@@ -147,7 +148,8 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         long streamResumeFrom = existing?.Length ?? 0;
 
         using HttpResponseMessage response = await SendAsync(
-            request.Source, streamResumeFrom, null, existing?.Metadata.Validator, linkedToken, callerToken);
+            request.Source, streamResumeFrom, null, existing?.Metadata.Validator, request.Context,
+            linkedToken, callerToken);
 
         await HandleStaleRangeAsync(response, existing, request);
         EnsureSuccess(response);
@@ -271,7 +273,8 @@ public sealed class HttpDownloadEngine : IDownloadEngine
                 handle,
                 firstResponse,
                 (segment, token) => SendAsync(
-                    request.Source, segment.Position, segment.End, metadata.Validator, token, callerToken),
+                    request.Source, segment.Position, segment.End, metadata.Validator, request.Context,
+                    token, callerToken),
                 () => idle.CancelAfter(IdleTimeout),
                 linkedToken);
         }
@@ -439,6 +442,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         long from,
         long? to,
         string? validator,
+        RequestContext? context,
         CancellationToken linkedToken,
         CancellationToken callerToken)
     {
@@ -457,6 +461,8 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             message.Headers.TryAddWithoutValidation("If-Range", validator);
         }
 
+        Apply(context, message);
+
         try
         {
             return await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, linkedToken);
@@ -471,6 +477,36 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         {
             throw new DownloadFailedException(
                 "Could not reach the server.", null, null, isTransient: true, exception);
+        }
+    }
+
+    /// <summary>
+    /// Carries the browser's session onto the request. Added without validation on
+    /// purpose: these values are the browser's own, and .NET rejects header shapes that
+    /// real servers accept and real browsers send. Every one is applied per request rather
+    /// than on the shared HttpClient, because one transfer's cookies must never leak onto
+    /// another's — the client is reused across every download in the application.
+    /// </summary>
+    private static void Apply(RequestContext? context, HttpRequestMessage message)
+    {
+        if (context is null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.Cookie))
+        {
+            message.Headers.TryAddWithoutValidation("Cookie", context.Cookie);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.Referrer))
+        {
+            message.Headers.TryAddWithoutValidation("Referer", context.Referrer);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.UserAgent))
+        {
+            message.Headers.TryAddWithoutValidation("User-Agent", context.UserAgent);
         }
     }
 

@@ -175,7 +175,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Dispatcher.UIThread.Post(() =>
         {
             DownloadItemViewModel item = DownloadItemViewModel.Create(
-                _scheduler, _repository, _shell, _logger, url);
+                _scheduler, _repository, _shell, _logger, url, context: message.ToRequestContext());
 
             Track(item, atTop: true);
             Selected = item;

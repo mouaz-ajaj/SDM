@@ -1,3 +1,5 @@
+using SDM.Core.Downloads;
+
 namespace SDM.Application.Integration;
 
 /// <summary>
@@ -33,6 +35,20 @@ public sealed record BridgeMessage
     public string? FileName { get; init; }
 
     public string? Referrer { get; init; }
+
+    /// <summary>
+    /// The Cookie header the browser would have sent, assembled by the extension. Without
+    /// it a file behind a login is fetched as a stranger, and the sign-in page arrives
+    /// under the name of the file that was wanted.
+    /// </summary>
+    public string? Cookie { get; init; }
+
+    /// <summary>The browser's own User-Agent, for servers that serve by client.</summary>
+    public string? UserAgent { get; init; }
+
+    /// <summary>Everything the browser knew that SDM cannot work out for itself.</summary>
+    public RequestContext ToRequestContext() =>
+        new() { Cookie = Cookie, Referrer = Referrer, UserAgent = UserAgent };
 }
 
 /// <summary>What the application answers. Always sent, so the browser is never left waiting.</summary>

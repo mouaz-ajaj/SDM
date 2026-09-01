@@ -46,14 +46,12 @@ It is under active development. What works and what does not is listed plainly b
 - A native messaging host (`SDM.NativeHost`) speaking Chrome's framing over stdin/stdout
 - A named pipe to the running application, restricted to the current user; the host never
   downloads anything itself, so there is one engine however many browsers are connected
-- A Chrome extension: right-click a link, "Download with SDM", and it appears in the app,
-  which starts if it is not already running. See [extension/](extension/)
+- A Chrome extension that takes over the browser's downloads, sending the cookies, the
+  referring page and the user-agent with them, so a file behind a login still downloads.
+  A download is only taken from Chrome once SDM has accepted it. See [extension/](extension/)
 
 ## What does not exist yet
 
-- **Interception of the browser's own downloads.** Right-clicking a link and choosing
-  "Download with SDM" works; clicking a download link still downloads in the browser.
-  See Track C in the [roadmap](docs/roadmap.md).
 - **Video.** No media detection, quality selection, HLS/DASH, or muxing.
 - **A speed limit**, scheduling, clipboard monitoring, notifications, and a tray icon.
 - **Packaging:** no installer, code signing, or updater.
@@ -97,7 +95,7 @@ dotnet build SDM.sln --configuration Release --no-restore
 dotnet test  SDM.sln --configuration Release --no-build
 ```
 
-Warnings are errors here, and the suite is 179 tests. Tests that need a server run against
+Warnings are errors here, and the suite is 181 tests. Tests that need a server run against
 a local `HttpListener`, never the public internet.
 
 ## Run

@@ -8,10 +8,20 @@
   "permissions": [
     "contextMenus",
     "nativeMessaging",
-    "notifications"
+    "notifications",
+    "downloads",
+    "cookies",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "icons": {
     "16": "icons/icon16.png",
