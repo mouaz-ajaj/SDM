@@ -2,12 +2,14 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SDM.Application.ApplicationInfo;
 using SDM.Application.Downloads;
+using SDM.Application.Integration;
 using SDM.Core.Downloads;
 using SDM.Desktop.Services;
 
@@ -34,6 +36,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly ISaveLocationPicker _picker;
     private readonly DialogSaveLocationPicker _dialogs;
     private readonly IOptionsMonitor<DownloadOptions> _options;
+    private readonly IBrowserBridge _bridge;
     private readonly ILogger<MainWindowViewModel> _logger;
 
     [ObservableProperty]
@@ -69,6 +72,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ISaveLocationPicker picker,
         DialogSaveLocationPicker dialogs,
         IOptionsMonitor<DownloadOptions> options,
+        IBrowserBridge bridge,
         ILogger<MainWindowViewModel> logger)
     {
         ArgumentNullException.ThrowIfNull(applicationInfo);
@@ -78,6 +82,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(picker);
         ArgumentNullException.ThrowIfNull(dialogs);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(bridge);
         ArgumentNullException.ThrowIfNull(logger);
 
         _applicationInfo = applicationInfo;
@@ -87,6 +92,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _picker = picker;
         _dialogs = dialogs;
         _options = options;
+        _bridge = bridge;
         _logger = logger;
 
         Filters = [.. Enum.GetValues<TransferFilter>().Select(value => new FilterOptionViewModel(value))];
@@ -144,7 +150,38 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         Refresh();
+
+        // Started only once the list is restored, so a link arriving in the first second
+        // is not lost or duplicated against a half-built list.
+        _bridge.DownloadRequested += OnBrowserRequest;
+        await _bridge.StartAsync();
     }
+
+    /// <summary>
+    /// A link handed over by the browser. The bridge raises this on its own thread, so
+    /// the work is posted to the interface thread before touching the list.
+    /// </summary>
+    private void OnBrowserRequest(object? sender, BridgeMessage message)
+    {
+        if (message.Url is not { Length: > 0 } url)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            DownloadItemViewModel item = DownloadItemViewModel.Create(
+                _scheduler, _repository, _logger, url);
+
+            Track(item, atTop: true);
+            Selected = item;
+            _ = item.RunAsync();
+        });
+    }
+
+    public string BridgeAddress => _bridge.Address;
+
+    public bool IsBridgeRunning => _bridge.IsRunning;
 
     private bool CanAdd => !string.IsNullOrWhiteSpace(Address);
 
@@ -280,6 +317,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             download.Dispose();
         }
+
+        _bridge.DownloadRequested -= OnBrowserRequest;
+        await _bridge.DisposeAsync();
     }
 
     private void Track(DownloadItemViewModel item, bool atTop = false)

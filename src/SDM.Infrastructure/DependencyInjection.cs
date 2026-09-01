@@ -1,9 +1,11 @@
 using System.Net;
 using Microsoft.Extensions.DependencyInjection;
 using SDM.Application.Downloads;
+using SDM.Application.Integration;
 using SDM.Application.Settings;
 using SDM.Core.Downloads;
 using SDM.Infrastructure.Downloads;
+using SDM.Infrastructure.Integration;
 using SDM.Infrastructure.Settings;
 
 namespace SDM.Infrastructure;
@@ -34,6 +36,7 @@ public static class DependencyInjection
         services.AddSingleton<IDownloadEngine, HttpDownloadEngine>();
         services.AddSingleton<IDownloadFolder, DefaultDownloadFolder>();
         services.AddSingleton<IUserSettingsStore, JsonUserSettingsStore>();
+        services.AddSingleton<IBrowserBridge, NamedPipeBrowserBridge>();
         return services;
     }
 }

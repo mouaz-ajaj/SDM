@@ -10,9 +10,9 @@ namespace SDM.IntegrationTests;
 public sealed class DependencyInjectionTests
 {
     [Fact]
-    public void CompositionRoot_BuildsAndResolvesRequiredServices()
+    public async Task CompositionRoot_BuildsAndResolvesRequiredServices()
     {
-        using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider();
+        await using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider();
 
         IApplicationInfoService applicationInfo = provider.GetRequiredService<IApplicationInfoService>();
         MainWindowViewModel viewModel = provider.GetRequiredService<MainWindowViewModel>();
@@ -23,9 +23,9 @@ public sealed class DependencyInjectionTests
     }
 
     [Fact]
-    public void CompositionRoot_WiresTheDownloadPipelineEndToEnd()
+    public async Task CompositionRoot_WiresTheDownloadPipelineEndToEnd()
     {
-        using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider();
+        await using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider();
 
         Assert.NotNull(provider.GetRequiredService<IDownloadEngine>());
         Assert.NotNull(provider.GetRequiredService<IStartDownloadUseCase>());
@@ -33,11 +33,14 @@ public sealed class DependencyInjectionTests
     }
 
     [Fact]
-    public void CompositionRoot_CanBeCreatedWithoutDesktopLifetime()
+    public async Task CompositionRoot_CanBeCreatedAndDisposedWithoutADesktopLifetime()
     {
-        Exception? exception = Record.Exception(() =>
+        // Disposal is part of the contract, not an afterthought: a container holding an
+        // async-disposable service throws if it is torn down the synchronous way, and
+        // that tear-down happens on every single exit.
+        Exception? exception = await Record.ExceptionAsync(async () =>
         {
-            using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider();
+            await using ServiceProvider provider = SdmBootstrapper.CreateServiceProvider();
             _ = provider.GetRequiredService<IApplicationInfoService>();
         });
 

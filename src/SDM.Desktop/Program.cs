@@ -9,7 +9,7 @@ namespace SDM.Desktop;
 internal static class Program
 {
     [STAThread]
-    public static int Main(string[] args)
+    public static async Task<int> Main(string[] args)
     {
         ServiceProvider? services = null;
 
@@ -48,7 +48,13 @@ internal static class Program
         }
         finally
         {
-            services?.Dispose();
+            // DisposeAsync, not Dispose: the container now holds services that only
+            // implement IAsyncDisposable — the browser bridge has a loop to unwind —
+            // and disposing such a container synchronously throws.
+            if (services is not null)
+            {
+                await services.DisposeAsync();
+            }
         }
     }
 

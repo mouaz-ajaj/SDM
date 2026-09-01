@@ -319,6 +319,12 @@ mature engine instead of a fragile one.
 **Acceptance:** a script pipes a framed JSON message in and reads a valid framed
 response out; the registry key exists and points at the right executable.
 
+DONE. Verified end to end: `toolssend-native-message.ps1` framed a download request,
+the host carried it over the pipe, and the file landed in `DownloadsCompressed`.
+IPC decided: a named pipe scoped to the current user. The host starts SDM when it is
+not running and never transfers anything itself, so there is one engine however many
+browsers are connected.
+
 ### Phase 4.2 — Minimal extension: "Send to SDM"
 
 **Scope:** `extension/` folder, MV3 manifest, background service worker, a right-click

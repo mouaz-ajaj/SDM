@@ -25,4 +25,23 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!--
+    The browser launches the native host from wherever SDM was installed, and the host
+    starts the application from beside itself. The two have to ship in one folder, so the
+    host is built with the application and copied here rather than left in its own output
+    directory where nothing would ever find it.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\SDM.NativeHost\SDM.NativeHost.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
+  </ItemGroup>
+
+  <Target Name="CopyNativeHost" AfterTargets="Build">
+    <ItemGroup>
+      <NativeHostOutput Include="$(MSBuildThisFileDirectory)..\SDM.NativeHost\bin\$(Configuration)\$(TargetFramework)\SDM.NativeHost.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NativeHostOutput)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

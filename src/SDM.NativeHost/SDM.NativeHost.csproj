@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>SDM.NativeHost</AssemblyName>
+    <RootNamespace>SDM.NativeHost</RootNamespace>
+    <!-- Launched by the browser with no console of its own; a window would flash. -->
+    <UseWindowsForms>false</UseWindowsForms>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SDM.Core\SDM.Core.csproj" />
+    <ProjectReference Include="..\SDM.Application\SDM.Application.csproj" />
+    <ProjectReference Include="..\SDM.Infrastructure\SDM.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
