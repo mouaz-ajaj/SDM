@@ -66,7 +66,11 @@ public sealed partial class MainWindow : Window
     /// </summary>
     protected override void OnClosing(WindowClosingEventArgs e)
     {
-        if (!_shutdownStarted && DataContext is MainWindowViewModel viewModel && viewModel.HasActiveDownloads)
+        // Every close runs the shutdown, not only one with transfers in flight. Closing an
+        // idle window used to skip it entirely, which left the browser bridge listening and
+        // its last rows unflushed, and made the container the first thing to try stopping
+        // the bridge — after the dispatcher had already gone.
+        if (!_shutdownStarted && DataContext is MainWindowViewModel viewModel)
         {
             _shutdownStarted = true;
             e.Cancel = true;

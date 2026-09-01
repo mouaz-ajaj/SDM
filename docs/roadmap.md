@@ -409,6 +409,29 @@ menu makes the same choice with "Save link as…" beside "Save image as…".
 **Still needs a person:** loading the folder once at `chrome://extensions`. Nothing in this
 repository can do that.
 
+### Phase 3.12 — The process that would not exit — DONE
+
+Closing the window left SDM.Desktop.exe running. Four times in one session it locked the
+build output, and it would have quietly accumulated on the user's machine, each copy
+holding the database and the log.
+
+Not intermittent, as first assumed: reproducing it deliberately failed 3 out of 3, and a
+managed stack dump settled it — the main thread blocked on Main's task, no SDM frame on
+any thread, so something awaited was never going to complete.
+
+**Two causes, both real**
+- `WaitForConnectionAsync` on a pipe no browser will ever connect to does not reliably
+  observe its cancellation token on Windows. The accept loop never ended, so disposing the
+  bridge never returned. It is now ended by disposing the stream the wait sits on, and the
+  wait for the loop is bounded so no future stall can hang an exit again.
+- `OnClosing` only ran the shutdown when transfers were in flight. Closing an idle window
+  skipped it, leaving the bridge listening and the last rows unflushed — and making the
+  container the first thing to stop the bridge, after the dispatcher had gone.
+
+**Acceptance:** four consecutive closes exited in 0.16s, against 0 of 3 within twelve
+seconds before. Closing during a live transfer still exits at once and keeps the partial
+file for resume.
+
 ### Phase 4.3 — Intercept browser downloads
 
 **Scope:** `chrome.downloads` interception — cancel the browser's download, hand the

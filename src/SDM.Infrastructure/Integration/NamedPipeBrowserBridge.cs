@@ -17,12 +17,20 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
+
     private readonly IApplicationInfoService _applicationInfo;
     private readonly ILogger<NamedPipeBrowserBridge> _logger;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string _pipeName;
 
     private Task? _acceptLoop;
+
+    /// <summary>
+    /// The server instance currently waiting for a browser, so shutdown can break that
+    /// wait. Read and written from two threads, hence volatile.
+    /// </summary>
+    private volatile NamedPipeServerStream? _waiting;
 
     /// <param name="pipeName">
     /// Null uses the per-user name. Tests pass their own: the real name is taken by any
@@ -71,11 +79,21 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
                 // A fresh server instance per connection: one misbehaving client cannot
                 // hold the pipe and lock every later request out.
                 await using NamedPipeServerStream server = CreateServer();
+
+                _waiting = server;
                 await server.WaitForConnectionAsync(cancellationToken);
+                _waiting = null;
+
                 await ServeAsync(server, cancellationToken);
             }
             catch (OperationCanceledException)
             {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                // Shutdown disposed the stream underneath the wait. That is the intended
+                // way out of a WaitForConnectionAsync no browser is ever going to satisfy.
                 return;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -206,15 +224,36 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
             await _shutdown.CancelAsync();
         }
 
+        // Cancelling the token is not enough. A WaitForConnectionAsync that no browser is
+        // going to satisfy does not reliably observe cancellation on Windows, and the loop
+        // task then never completes — so awaiting it below never returns, and the process
+        // outlives its own window with no thread doing anything. Disposing the stream the
+        // wait is sitting on is what actually ends it.
+        try
+        {
+            _waiting?.Dispose();
+        }
+        catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+        {
+            // Racing the loop, which may have just accepted a connection and disposed it.
+        }
+
         if (_acceptLoop is not null)
         {
             try
             {
-                await _acceptLoop;
+                // Bounded, because nothing here is worth hanging an exit on. If the loop
+                // ever finds a new way to get stuck, the log says so and the process still
+                // closes.
+                await _acceptLoop.WaitAsync(ShutdownTimeout);
             }
             catch (OperationCanceledException)
             {
                 // Expected: the loop is being shut down.
+            }
+            catch (TimeoutException)
+            {
+                _logger.LogWarning("The browser bridge did not stop within {Timeout}.", ShutdownTimeout);
             }
         }
 
