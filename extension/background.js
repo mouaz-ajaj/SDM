@@ -55,11 +55,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   const url = info[menu.from];
 
   if (url) {
-    handOver(url, tab && tab.url).then((reply) => {
-      if (!reply.ok) {
-        notify("SDM did not take the download", reply.message);
-      }
-    });
+    // A right-clicked link the browser was never asked to fetch has no request to copy,
+    // unless the page happened to load it already.
+    headersFor(url)
+      .then((headers) => handOver(url, tab && tab.url, headers))
+      .then((reply) => {
+        if (!reply.ok) {
+          notify("SDM did not take the download", reply.message);
+        }
+      });
   }
 });
 
@@ -75,9 +79,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 // because they do this instead: watch the real request go out and copy all of it.
 //
 // Observation only. MV3 forbids blocking webRequest listeners, and nothing here needs one.
-const recent = new Map();
-const RECENT_LIMIT = 40;
-const RECENT_MS = 90_000;
+//
+// Kept in chrome.storage.session, not in a variable. A manifest v3 service worker is
+// killed after about thirty seconds of inactivity, taking every variable with it — so a
+// header set captured in memory was routinely gone by the time the download it belonged to
+// arrived, and the handover silently fell back to the three guessed headers. That is why a
+// protected download still answered 403 after the capture was added: the capture worked,
+// and then evaporated. storage.session survives the worker and is cleared when the browser
+// closes, which is the right lifetime for a request header anyway.
+const RECENT_MS = 120_000;
 
 chrome.webRequest.onSendHeaders.addListener(
   (details) => {
@@ -92,7 +102,11 @@ chrome.webRequest.onSendHeaders.addListener(
   ["requestHeaders", "extraHeaders"]
 );
 
-function remember(url, headers) {
+function keyFor(url) {
+  return "req:" + url;
+}
+
+async function remember(url, headers) {
   const captured = {};
 
   for (const header of headers) {
@@ -101,28 +115,40 @@ function remember(url, headers) {
     }
   }
 
-  recent.set(url, { headers: captured, at: Date.now() });
-
-  // A service worker holds this for as long as it lives, which is not long, and a download
-  // follows its request within moments. Old entries are dropped rather than kept: they are
-  // request headers, several of them credentials.
-  for (const [key, value] of recent) {
-    if (recent.size <= RECENT_LIMIT && Date.now() - value.at < RECENT_MS) {
-      break;
-    }
-
-    recent.delete(key);
+  try {
+    await chrome.storage.session.set({ [keyFor(url)]: { headers: captured, at: Date.now() } });
+  } catch (error) {
+    // Session storage has a size cap. Losing one capture is not worth failing a download.
   }
 }
 
-function headersFor(url) {
-  const entry = recent.get(url);
+// Tries the final URL and the original, because a download that was redirected reports one
+// of each and the request was watched under whichever came first.
+async function headersFor(...urls) {
+  for (const url of urls) {
+    if (!url) {
+      continue;
+    }
 
-  if (!entry || Date.now() - entry.at > RECENT_MS) {
-    return undefined;
+    try {
+      const stored = await chrome.storage.session.get(keyFor(url));
+      const entry = stored[keyFor(url)];
+
+      if (entry && Date.now() - entry.at < RECENT_MS) {
+        log("copied", Object.keys(entry.headers).length, "headers from the real request");
+        return entry.headers;
+      }
+    } catch (error) {
+      // Fall through to the next candidate.
+    }
   }
 
-  return entry.headers;
+  log("no captured headers for this download; falling back to cookie and referer alone");
+  return undefined;
+}
+
+function log(...parts) {
+  console.log("[SDM]", ...parts);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,34 +177,48 @@ async function takeOver(item) {
   // it. Cancelling first would mean one broken component silently breaks every download in
   // the browser.
   const paused = await chrome.downloads.pause(item.id).then(() => true, () => false);
-
-  if (!paused) {
-    // Already finished, or already gone. Handing it over now would download a second copy
-    // of a file the browser has already written, so it is left alone: one file, from the
-    // browser, is better than two.
-    return;
-  }
-
   const url = item.finalUrl || item.url;
 
+  log(paused ? "paused, handing over:" : "too fast to pause, handing over anyway:", url);
+
   if (!(await enabled()) || (await excluded(url))) {
-    await chrome.downloads.resume(item.id).catch(() => {});
+    log("left to Chrome (turned off, or an excluded site):", url);
+
+    if (paused) {
+      await chrome.downloads.resume(item.id).catch(() => {});
+    }
+
     return;
   }
 
-  const reply = await handOver(url, item.referrer, headersFor(url) || headersFor(item.url));
+  // Handed over even when the pause came too late. An earlier version gave up here, on the
+  // grounds that one file from the browser beats two — but the point of the setting is
+  // that downloads go to SDM, and "except the quick ones" is not something anyone asked
+  // for. Chrome's copy is removed below, once SDM has agreed to take it.
+  const reply = await handOver(url, item.referrer, await headersFor(url, item.url));
 
-  if (reply.ok) {
-    await chrome.downloads.cancel(item.id).catch(() => {});
+  if (!reply.ok) {
+    log("SDM refused, Chrome keeps it:", reply.message);
 
-    // Removes the entry from the browser's own download list. Leaving it would show a
-    // cancelled download beside a working one for the same file.
-    await chrome.downloads.erase({ id: item.id }).catch(() => {});
+    if (paused) {
+      await chrome.downloads.resume(item.id).catch(() => {});
+    }
+
+    notify("SDM did not take the download", reply.message + " Chrome is downloading it instead.");
     return;
   }
 
-  await chrome.downloads.resume(item.id).catch(() => {});
-  notify("SDM did not take the download", reply.message + " Chrome is downloading it instead.");
+  // Cancelling deletes a part-downloaded file; removeFile deletes a finished one. Which
+  // applies depends on whether the pause won its race, and both are harmless when they do
+  // not apply.
+  await chrome.downloads.cancel(item.id).catch(() => {});
+  await chrome.downloads.removeFile(item.id).catch(() => {});
+
+  // Removes the entry from the browser's own list, which would otherwise show a cancelled
+  // download beside the working one.
+  await chrome.downloads.erase({ id: item.id }).catch(() => {});
+
+  log("SDM took it:", url);
 }
 
 // Sites whose downloads stay with the browser. Some downloads cannot be reproduced from
