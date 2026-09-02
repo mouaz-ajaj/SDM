@@ -27,8 +27,20 @@ public sealed record RequestContext
     /// <summary>The browser's own User-Agent, so the server sees the client it expects.</summary>
     public string? UserAgent { get; init; }
 
+    /// <summary>
+    /// Every header the browser actually sent on this request, captured as it went out.
+    ///
+    /// Guessing three headers is not enough, and this is why: an application's own API
+    /// answers the request its page made, and what makes that request acceptable may be a
+    /// header nobody outside the site could name — a client build id, a workspace id, a
+    /// token that was never a cookie. Copying the real set asks no questions about which
+    /// headers matter.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Headers { get; init; }
+
     public bool IsEmpty =>
         string.IsNullOrWhiteSpace(Cookie)
         && string.IsNullOrWhiteSpace(Referrer)
-        && string.IsNullOrWhiteSpace(UserAgent);
+        && string.IsNullOrWhiteSpace(UserAgent)
+        && (Headers is null || Headers.Count == 0);
 }

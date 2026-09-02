@@ -64,6 +64,68 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 // ---------------------------------------------------------------------------
+// Watching what the browser actually sends
+// ---------------------------------------------------------------------------
+
+// Sending a cookie, a referer and a user-agent is a guess about which three headers
+// matter. It is often right and sometimes badly wrong: an application's own API answers
+// the request its page made, and what makes that request acceptable may be a header nobody
+// outside the site could name — a client build id, a workspace id, a token that was never a
+// cookie. Guessing produced a 403 on a file that other download managers fetch happily,
+// because they do this instead: watch the real request go out and copy all of it.
+//
+// Observation only. MV3 forbids blocking webRequest listeners, and nothing here needs one.
+const recent = new Map();
+const RECENT_LIMIT = 40;
+const RECENT_MS = 90_000;
+
+chrome.webRequest.onSendHeaders.addListener(
+  (details) => {
+    if (details.requestHeaders) {
+      remember(details.url, details.requestHeaders);
+    }
+  },
+  { urls: ["http://*/*", "https://*/*"] },
+
+  // extraHeaders is required for Cookie and the Sec-* family: without it Chrome hides
+  // exactly the headers that decide whether a protected download is allowed.
+  ["requestHeaders", "extraHeaders"]
+);
+
+function remember(url, headers) {
+  const captured = {};
+
+  for (const header of headers) {
+    if (typeof header.value === "string") {
+      captured[header.name] = header.value;
+    }
+  }
+
+  recent.set(url, { headers: captured, at: Date.now() });
+
+  // A service worker holds this for as long as it lives, which is not long, and a download
+  // follows its request within moments. Old entries are dropped rather than kept: they are
+  // request headers, several of them credentials.
+  for (const [key, value] of recent) {
+    if (recent.size <= RECENT_LIMIT && Date.now() - value.at < RECENT_MS) {
+      break;
+    }
+
+    recent.delete(key);
+  }
+}
+
+function headersFor(url) {
+  const entry = recent.get(url);
+
+  if (!entry || Date.now() - entry.at > RECENT_MS) {
+    return undefined;
+  }
+
+  return entry.headers;
+}
+
+// ---------------------------------------------------------------------------
 // Taking over the browser's own downloads
 // ---------------------------------------------------------------------------
 
@@ -104,7 +166,7 @@ async function takeOver(item) {
     return;
   }
 
-  const reply = await handOver(url, item.referrer);
+  const reply = await handOver(url, item.referrer, headersFor(url) || headersFor(item.url));
 
   if (reply.ok) {
     await chrome.downloads.cancel(item.id).catch(() => {});
@@ -164,12 +226,16 @@ async function enabled() {
 // Talking to SDM
 // ---------------------------------------------------------------------------
 
-async function handOver(url, referrer) {
+async function handOver(url, referrer, headers) {
   const message = {
     type: "download",
     url: url,
     fileName: fileNameFrom(url),
     referrer: referrer,
+
+    // The real request, when there was one to watch. Everything below is the fallback for
+    // a right-clicked link the browser was never asked to fetch.
+    headers: headers,
 
     // What SDM cannot work out for itself. Fetching from another process makes it a
     // different visitor, and a file behind a login is not a file at a URL — it is a file

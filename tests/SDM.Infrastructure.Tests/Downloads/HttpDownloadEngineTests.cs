@@ -114,6 +114,44 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAsync_CopiesTheBrowsersOwnHeadersWithoutLettingThemBreakTheTransfer()
+    {
+        // Guessing which three headers a site needs is what produced a 403 on a file other
+        // download managers fetch happily. The whole captured request is copied instead —
+        // including headers nobody outside that site could have named.
+        //
+        // But not the ones the transfer owns. Accept-Encoding is the dangerous one:
+        // decompression is off so that what is counted is what lands on disk, and honouring
+        // the browser's gzip would write compressed bytes into the file and call it done.
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider();
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        await engine.DownloadAsync(
+            new DownloadRequest(
+                server.Url("echo-headers.bin"),
+                _workingDirectory,
+                context: new RequestContext
+                {
+                    Headers = new Dictionary<string, string>
+                    {
+                        ["anthropic-client-version"] = "web_1.2.3",
+                        ["Cookie"] = "session=from-the-real-request",
+                        ["Accept-Encoding"] = "gzip, deflate, br",
+                        ["Range"] = "bytes=999-1000",
+                    },
+                }),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("web_1.2.3", _seenHeaders["anthropic-client-version"]);
+        Assert.Equal("session=from-the-real-request", _seenHeaders["Cookie"]);
+
+        // The transfer's own range survived; the browser's was ignored.
+        Assert.Equal("bytes=0-", _seenHeaders["Range"]);
+        Assert.Equal(string.Empty, _seenHeaders["Accept-Encoding"]);
+    }
+
+    [Fact]
     public async Task DownloadAsync_WithoutTheSessionIsRefusedRatherThanSavingTheRefusal()
     {
         // The other half of the same guarantee: a 403 has to fail the transfer. Writing
@@ -808,6 +846,19 @@ public sealed class HttpDownloadEngineTests : IDisposable
             case "/archive.zip":
                 // The name says zip and the server says "bytes". The name wins.
                 context.Response.ContentType = "application/octet-stream";
+                context.Response.ContentLength64 = _small.Length;
+                await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
+                break;
+
+            case "/echo-headers.bin":
+                foreach (string name in new[]
+                         {
+                             "anthropic-client-version", "Cookie", "Range", "Accept-Encoding",
+                         })
+                {
+                    _seenHeaders[name] = context.Request.Headers[name] ?? string.Empty;
+                }
+
                 context.Response.ContentLength64 = _small.Length;
                 await context.Response.OutputStream.WriteAsync(_small, cancellationToken);
                 break;

@@ -14,9 +14,6 @@ the product page wrapped around it. Chrome does not guess either — its own men
 "Save link as…" and "Save image as…" side by side — so neither does this. On a plain link
 only one entry appears; on a linked image, both do, and you choose.
 
-This is the whole extension for now. Taking over the browser's own downloads is
-[Phase 4.3](../docs/roadmap.md), and forwarding cookies is Phase 4.4.
-
 ## Installing it
 
 1. Build the solution, so `SDM.NativeHost.exe` exists beside `SDM.Desktop.exe`.
@@ -61,17 +58,21 @@ A download that finishes before the handover completes is also left alone. Reach
 means launching a process and waiting on a pipe, and a small file can be finished by then —
 at which point taking it over would fetch a second copy of a file the browser already has.
 
-## Downloads that cannot be taken over
+## The real request is copied, not guessed
 
-Some downloads only work inside the browser. An endpoint that answers the request the page
-itself made — checking headers no other program can supply, or a token that was never in a
-cookie — refuses SDM with **403** however complete a session it is given. Application APIs
-do this deliberately, and no download manager can work around it; it is the same reason
-IDM leaves some links alone.
+Sending a cookie, a referer and a user-agent is a guess about which three headers matter.
+It is often right and sometimes badly wrong: an application API answers the request its own
+page made, and what makes that request acceptable may be a header nobody outside the site
+could name — a client build id, a workspace id, a token that was never a cookie.
 
-The options page takes a list of hostnames whose downloads stay with the browser. Put such
-a site there and it downloads normally, with everything else still going to SDM. Subdomains
-are included: `claude.ai` also covers `api.claude.ai`.
+So the extension watches the request go out and copies all of it. SDM applies the whole set,
+except the handful the transfer itself owns: `Range` and `If-Range` are how a download is
+split and resumed, and `Accept-Encoding` is deliberately dropped because SDM turns automatic
+decompression off — honouring the browser's gzip would write compressed bytes into the file
+and call it finished.
+
+If a site still refuses, the options page takes a list of hostnames whose downloads stay
+with the browser. Subdomains are included: `claude.ai` also covers `api.claude.ai`.
 
 ## The session travels with the download
 
@@ -94,6 +95,7 @@ is the better of the two failures.
 | `downloads` | Pausing, cancelling and resuming the browser's own downloads. |
 | `cookies` | The session that makes a protected download work at all. |
 | `storage` | Remembering the one setting on the options page. |
+| `webRequest` | Watching the real request go out, so its headers can be copied rather than guessed. Observation only — MV3 forbids blocking listeners, and nothing here needs one. |
 | `notifications` | Failures are silent otherwise. Nothing is shown on success — SDM's own window is where a transfer belongs, and a notification per download would be noise. |
 | `<all_urls>` | `chrome.cookies` is per-site: reading the cookies for a download means host access to the site it came from, and a download can come from anywhere. |
 

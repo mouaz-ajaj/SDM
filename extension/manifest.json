@@ -11,7 +11,8 @@
     "notifications",
     "downloads",
     "cookies",
-    "storage"
+    "storage",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"

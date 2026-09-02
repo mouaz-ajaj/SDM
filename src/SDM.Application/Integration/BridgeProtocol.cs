@@ -46,9 +46,22 @@ public sealed record BridgeMessage
     /// <summary>The browser's own User-Agent, for servers that serve by client.</summary>
     public string? UserAgent { get; init; }
 
+    /// <summary>
+    /// Every header the browser actually sent on the request being taken over, captured by
+    /// the extension as it went out. Guessing which headers a site needs is a losing game;
+    /// copying the real ones asks the question of nobody.
+    /// </summary>
+    public Dictionary<string, string>? Headers { get; init; }
+
     /// <summary>Everything the browser knew that SDM cannot work out for itself.</summary>
     public RequestContext ToRequestContext() =>
-        new() { Cookie = Cookie, Referrer = Referrer, UserAgent = UserAgent };
+        new()
+        {
+            Cookie = Cookie,
+            Referrer = Referrer,
+            UserAgent = UserAgent,
+            Headers = Headers,
+        };
 }
 
 /// <summary>What the application answers. Always sent, so the browser is never left waiting.</summary>

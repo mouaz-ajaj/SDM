@@ -494,21 +494,56 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(context.Cookie))
+        if (context.Headers is { Count: > 0 })
         {
-            message.Headers.TryAddWithoutValidation("Cookie", context.Cookie);
+            foreach ((string name, string value) in context.Headers)
+            {
+                if (IsOursToDecide(name))
+                {
+                    continue;
+                }
+
+                message.Headers.TryAddWithoutValidation(name, value);
+            }
         }
 
-        if (!string.IsNullOrWhiteSpace(context.Referrer))
-        {
-            message.Headers.TryAddWithoutValidation("Referer", context.Referrer);
-        }
+        // Only where the captured set did not already carry them, or the value would be
+        // sent twice. These remain for the right-click path, where there is no request to
+        // copy — the user picked a link the browser was never asked to fetch.
+        AddIfAbsent(message, "Cookie", context.Cookie);
+        AddIfAbsent(message, "Referer", context.Referrer);
+        AddIfAbsent(message, "User-Agent", context.UserAgent);
+    }
 
-        if (!string.IsNullOrWhiteSpace(context.UserAgent))
+    private static void AddIfAbsent(HttpRequestMessage message, string name, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value) && !message.Headers.Contains(name))
         {
-            message.Headers.TryAddWithoutValidation("User-Agent", context.UserAgent);
+            message.Headers.TryAddWithoutValidation(name, value);
         }
     }
+
+    /// <summary>
+    /// Headers the transfer owns and a copied request must not override.
+    ///
+    /// <c>Range</c> and <c>If-Range</c> are how a transfer is split and resumed; taking the
+    /// browser's would ask for the wrong bytes. <c>Accept-Encoding</c> is the dangerous one:
+    /// the engine turns automatic decompression off so that what is counted is what lands on
+    /// disk, so inviting a compressed response would write gzip into a file named .zip and
+    /// call it finished. The rest are per-connection details that belong to whoever is
+    /// making the connection.
+    /// </summary>
+    private static bool IsOursToDecide(string name) =>
+        name.Equals("Range", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("If-Range", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Accept-Encoding", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Host", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Connection", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Keep-Alive", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Upgrade", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Proxy-Connection", StringComparison.OrdinalIgnoreCase);
 
     private Task HandleStaleRangeAsync(
         HttpResponseMessage response, ResumablePartial? existing, DownloadRequest request)

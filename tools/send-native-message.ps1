@@ -27,6 +27,7 @@ param(
     [string] $Cookie,
     [string] $Referrer,
     [string] $UserAgent,
+    [string[]] $Header,
     [int] $TimeoutSeconds = 30
 )
 
@@ -40,6 +41,17 @@ if ($FileName) { $message.fileName = $FileName }
 if ($Cookie) { $message.cookie = $Cookie }
 if ($Referrer) { $message.referrer = $Referrer }
 if ($UserAgent) { $message.userAgent = $UserAgent }
+
+# -Header 'name=value' repeated, standing in for the header set the extension captures
+# from the browser's own request.
+if ($Header) {
+    $table = @{}
+    foreach ($entry in $Header) {
+        $parts = $entry -split '=', 2
+        $table[$parts[0]] = $parts[1]
+    }
+    $message.headers = $table
+}
 
 $json = $message | ConvertTo-Json -Compress
 $payload = [Text.Encoding]::UTF8.GetBytes($json)

@@ -478,11 +478,16 @@ SDM launches a process and waits on a pipe, and a small file is finished inside 
 so cancelling it afterwards did nothing. The pause is now the first thing that happens, and
 a download that finished anyway is left alone rather than fetched a second time.
 
-*A claude.ai download answered 403.* Some endpoints only answer the request the page itself
-made, checking headers no other program can supply. No session makes that reproducible, and
-no download manager can work around it. The options page now takes a list of hostnames whose
-downloads stay with the browser — the honest answer, rather than a heuristic that would be
-wrong somewhere else.
+*A claude.ai download answered 403, and I called it unfixable.* That was wrong, and the
+user was right to push back: FDM downloads the same file. The difference is that sending a
+cookie, a referer and a user-agent is a guess about which three headers matter, and an
+application API answers the request its own page made — the header that makes it acceptable
+may be a client build id or a workspace token nobody outside the site could name. The
+extension now observes the real request through `chrome.webRequest.onSendHeaders` and copies
+the whole header set. SDM applies all of it except what the transfer owns: `Range`,
+`If-Range`, and `Accept-Encoding` — the last one because decompression is off, so accepting
+gzip would write compressed bytes into the file and call it complete. The site exclusion
+list stays as the fallback for whatever this still cannot reach.
 
 **Still needs a person:** reloading the extension at `chrome://extensions` — it now asks
 for `downloads`, `cookies` and host access, and Chrome requires that to be accepted by
