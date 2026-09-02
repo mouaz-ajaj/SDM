@@ -53,6 +53,39 @@
   }
 
   textarea:focus { outline: none; border-color: #1470f0; }
+
+  .status { margin-top: 12px; font: 13px/1.9 ui-monospace, Consolas, monospace; }
+
+  .ok { color: #3ddc97; }
+
+  .bad { color: #ff6b6b; }
+
+  pre {
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    max-height: 230px;
+    overflow: auto;
+    font: 11.5px/1.65 ui-monospace, Consolas, monospace;
+    color: #a2b4c9;
+    background: #0c141e;
+    border: 1px solid #1d2a3a;
+    border-radius: 8px;
+    white-space: pre-wrap;
+  }
+
+  button {
+    font: 12.5px "Segoe UI", system-ui, sans-serif;
+    color: #f3f7fc;
+    background: #16273a;
+    border: 1px solid #2a3e55;
+    border-radius: 7px;
+    padding: 7px 14px;
+    cursor: pointer;
+  }
+
+  button:hover { border-color: #17b4ff; }
+
+  #pinged { color: #a2b4c9; font-size: 12.5px; min-height: 18px; margin-top: 10px; }
 </style>
 
 <h1>SDM</h1>
@@ -83,6 +116,27 @@
   </div>
   <textarea id="excluded" spellcheck="false" placeholder="claude.ai&#10;mail.google.com"></textarea>
   <div id="savedSites"></div>
+</div>
+
+<div class="card">
+  <div class="title">Status</div>
+  <div class="why">
+    What the extension managed to switch on when Chrome last started it. A listener that
+    fails to register does so silently, and an extension with a dead one looks exactly like
+    a working extension until a download goes to the wrong place.
+  </div>
+  <div id="status" class="status">reading…</div>
+  <div style="margin-top:14px; display:flex; gap:10px;">
+    <button id="ping">Test connection to SDM</button>
+    <button id="refresh">Refresh</button>
+  </div>
+  <div id="pinged"></div>
+</div>
+
+<div class="card">
+  <div class="title">Recent activity</div>
+  <div class="why">What happened to the last downloads, newest at the bottom.</div>
+  <pre id="events">reading…</pre>
 </div>
 
 <p class="note">

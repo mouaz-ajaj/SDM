@@ -12,6 +12,14 @@ const TAKEOVER = "takeOverDownloads";
 // Hostnames the browser keeps for itself.
 const EXCLUDED = "excludedSites";
 
+// Declared up here, not beside the code that uses them: register() runs at the top of this
+// file and writes status through setStatus, and a const declared further down is still in
+// its temporal dead zone at that point. The throw would have been swallowed by the very
+// try/catch meant to keep diagnostics harmless, leaving the status empty exactly when it
+// was needed.
+const STATUS = "status";
+const EVENTS = "events";
+
 // One entry per kind of thing that can be downloaded, rather than one entry that guesses.
 //
 // A right-click on an image inside a link reports both a link and a source, and the first
@@ -87,9 +95,48 @@ function register(what, addListener) {
   try {
     addListener();
     log("listening:", what);
+    setStatus(what, "ok");
   } catch (error) {
     // Never rethrown: one unavailable API must not take the others down with it.
     log("NOT LISTENING:", what, "—", String(error));
+    setStatus(what, String(error));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Saying what actually happened
+// ---------------------------------------------------------------------------
+//
+// Two rounds of fixes changed nothing the user could see, and neither of us could tell
+// whether the code was even running: a service worker that fails to register a listener
+// does so silently, and looks identical to one whose logic is wrong. The options page
+// reads what is written here, so the next question is answered by looking rather than by
+// another guess.
+
+async function setStatus(what, state) {
+  try {
+    const stored = await chrome.storage.session.get(STATUS);
+    const status = stored[STATUS] || {};
+
+    status[what] = state;
+    status.startedAt = new Date().toISOString();
+
+    await chrome.storage.session.set({ [STATUS]: status });
+  } catch (error) {
+    // Nothing to do: this is the diagnostics, not the feature.
+  }
+}
+
+async function record(line) {
+  try {
+    const stored = await chrome.storage.session.get(EVENTS);
+    const events = stored[EVENTS] || [];
+
+    events.push(new Date().toLocaleTimeString() + "  " + line);
+
+    await chrome.storage.session.set({ [EVENTS]: events.slice(-60) });
+  } catch (error) {
+    // Same.
   }
 }
 
@@ -186,6 +233,7 @@ async function headersFor(...urls) {
 
 function log(...parts) {
   console.log("[SDM]", ...parts);
+  record(parts.join(" "));
 }
 
 // ---------------------------------------------------------------------------
