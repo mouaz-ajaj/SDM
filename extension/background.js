@@ -20,6 +20,12 @@ const EXCLUDED = "excludedSites";
 const STATUS = "status";
 const EVENTS = "events";
 
+// How recently a download must have started before it counts as one beginning now rather
+// than one the browser restored from history. Seconds, not minutes: the only thing that has
+// to fit inside it is the moment between Chrome creating a download and this listener
+// running.
+const FRESH_MS = 15_000;
+
 // One entry per kind of thing that can be downloaded, rather than one entry that guesses.
 //
 // A right-click on an image inside a link reports both a link and a source, and the first
@@ -340,14 +346,43 @@ function canTakeOver(item) {
   // Only what SDM can fetch on its own. A blob: or data: URL exists nowhere but inside the
   // page that made it.
   if (!url.startsWith("https://") && !url.startsWith("http://")) {
-    log("not taken over, cannot be refetched:", url);
+    log("skipped, cannot be refetched:", url);
     return false;
   }
 
-  // Deliberately not a check on item.state. onCreated reports whatever state the download
-  // happens to be in at that instant, and one that has already finished is still worth
-  // taking: the copy below is removed once SDM accepts. Requiring "in_progress" here made
-  // every fast download Chrome's.
+  // The important one.
+  //
+  // chrome.downloads.onCreated fires for every download the browser restores from its
+  // history when it starts, not only for downloads that are beginning now. A previous
+  // version of this function rejected those because it required state "in_progress"; I
+  // removed that check to stop fast downloads being left to Chrome, and by doing so handed
+  // the entire download history to SDM the next time the browser opened — ten transfers of
+  // files fetched weeks ago, all at once.
+  //
+  // Age is the honest test, because it is the thing that actually distinguishes them. A
+  // download beginning now started a moment ago; a restored one started whenever it did.
+  // An unparseable time counts as old: flooding SDM is far worse than missing one file.
+  const age = Date.now() - Date.parse(item.startTime);
+
+  if (!(age >= 0 && age < FRESH_MS)) {
+    log("skipped, restored from history rather than starting now:", url);
+    return false;
+  }
+
+  // A download the user paused themselves is not one to take over, and neither is one this
+  // extension paused and never finished handing over.
+  if (item.paused) {
+    log("skipped, already paused:", url);
+    return false;
+  }
+
+  // "complete" is allowed alongside "in_progress" precisely because it may have finished
+  // inside the handover window — but only while it is this recent.
+  if (item.state !== "in_progress" && item.state !== "complete") {
+    log("skipped, state is " + item.state + ":", url);
+    return false;
+  }
+
   return true;
 }
 
