@@ -9,6 +9,9 @@ const HOST = "com.sdm.host";
 // cached, so turning it off in the options page takes effect on the very next click.
 const TAKEOVER = "takeOverDownloads";
 
+// Hostnames the browser keeps for itself.
+const EXCLUDED = "excludedSites";
+
 // One entry per kind of thing that can be downloaded, rather than one entry that guesses.
 //
 // A right-click on an image inside a link reports both a link and a source, and the first
@@ -69,23 +72,39 @@ chrome.downloads.onCreated.addListener((item) => {
 });
 
 async function takeOver(item) {
-  if (!(await enabled()) || !canTakeOver(item)) {
+  if (!canTakeOver(item)) {
     return;
   }
 
+  // Paused before anything else is awaited, and before the settings are even read.
+  //
+  // Every await here is time Chrome spends downloading, and the handover is far from
+  // instant: it launches a process, which waits on a pipe, which may start SDM. A small
+  // file finishes inside that window. The first version read a setting from storage before
+  // pausing, and that alone was enough to lose the race — the browser had the whole file
+  // before SDM was asked, so cancelling it did nothing and both copies arrived.
+  //
   // Paused rather than cancelled, because SDM has not agreed to anything yet. Pausing
-  // stops the bytes immediately but keeps the browser's download alive, so if the handover
-  // fails for any reason the download can simply be resumed and the user loses nothing.
-  // Cancelling first would mean a broken bridge silently breaks every download in Chrome.
-  try {
-    await chrome.downloads.pause(item.id);
-  } catch (error) {
-    // Already finished, or already gone. Either way there is nothing left to take over —
-    // and nothing has been cancelled, so the file the user asked for is still theirs.
+  // stops the bytes but keeps the download alive, so a failed handover can simply resume
+  // it. Cancelling first would mean one broken component silently breaks every download in
+  // the browser.
+  const paused = await chrome.downloads.pause(item.id).then(() => true, () => false);
+
+  if (!paused) {
+    // Already finished, or already gone. Handing it over now would download a second copy
+    // of a file the browser has already written, so it is left alone: one file, from the
+    // browser, is better than two.
     return;
   }
 
-  const reply = await handOver(item.finalUrl || item.url, item.referrer);
+  const url = item.finalUrl || item.url;
+
+  if (!(await enabled()) || (await excluded(url))) {
+    await chrome.downloads.resume(item.id).catch(() => {});
+    return;
+  }
+
+  const reply = await handOver(url, item.referrer);
 
   if (reply.ok) {
     await chrome.downloads.cancel(item.id).catch(() => {});
@@ -98,6 +117,28 @@ async function takeOver(item) {
 
   await chrome.downloads.resume(item.id).catch(() => {});
   notify("SDM did not take the download", reply.message + " Chrome is downloading it instead.");
+}
+
+// Sites whose downloads stay with the browser. Some downloads cannot be reproduced from
+// outside it at all — an endpoint that answers only a request the page itself made, with
+// headers no other program can supply, refuses SDM with 403 however complete the session
+// it is given. Rather than pretend otherwise, those sites can be named here and left alone.
+async function excluded(url) {
+  const stored = await chrome.storage.local.get(EXCLUDED);
+  const list = stored[EXCLUDED];
+
+  if (!Array.isArray(list) || list.length === 0) {
+    return false;
+  }
+
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+
+    // "claude.ai" also covers "api.claude.ai", the way a person naming a site expects.
+    return list.some((entry) => host === entry || host.endsWith("." + entry));
+  } catch (error) {
+    return false;
+  }
 }
 
 // Only what SDM can actually fetch on its own. A blob: or data: URL exists nowhere but

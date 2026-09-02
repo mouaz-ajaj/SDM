@@ -470,6 +470,20 @@ failures, and stated here rather than discovered later.
   extension's own message shape, the host, the pipe and the engine, `httpbingo.org/headers`
   returned `Cookie: session=proof-of-cookie`, the referer and the user-agent unchanged.
 
+**Corrected after first real use, twice.**
+
+*Both SDM and Chrome downloaded the same file.* The setting was read from storage before
+the browser's download was paused, and that one await was enough to lose the race: reaching
+SDM launches a process and waits on a pipe, and a small file is finished inside that window,
+so cancelling it afterwards did nothing. The pause is now the first thing that happens, and
+a download that finished anyway is left alone rather than fetched a second time.
+
+*A claude.ai download answered 403.* Some endpoints only answer the request the page itself
+made, checking headers no other program can supply. No session makes that reproducible, and
+no download manager can work around it. The options page now takes a list of hostnames whose
+downloads stay with the browser — the honest answer, rather than a heuristic that would be
+wrong somewhere else.
+
 **Still needs a person:** reloading the extension at `chrome://extensions` — it now asks
 for `downloads`, `cookies` and host access, and Chrome requires that to be accepted by
 hand.

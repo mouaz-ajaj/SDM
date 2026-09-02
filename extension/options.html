@@ -36,7 +36,23 @@
 
   code { color: #17b4ff; font-size: 12px; }
 
-  #saved { color: #3ddc97; font-size: 12.5px; height: 18px; margin-top: 4px; }
+  #saved, #savedSites { color: #3ddc97; font-size: 12.5px; height: 18px; margin-top: 4px; }
+
+  textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 92px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    resize: vertical;
+    font: 12.5px/1.6 ui-monospace, Consolas, monospace;
+    color: #f3f7fc;
+    background: #0c141e;
+    border: 1px solid #1d2a3a;
+    border-radius: 8px;
+  }
+
+  textarea:focus { outline: none; border-color: #1470f0; }
 </style>
 
 <h1>SDM</h1>
@@ -54,6 +70,19 @@
     </span>
   </label>
   <div id="saved"></div>
+</div>
+
+<div class="card">
+  <div class="title">Sites the browser keeps</div>
+  <div class="why">
+    One hostname per line. Some downloads cannot be reproduced outside the browser at all:
+    an endpoint that answers only the request the page itself made will refuse SDM with
+    403 however complete a session it is given. Name those sites here and they download
+    normally. Subdomains are included — <code>claude.ai</code> also covers
+    <code>api.claude.ai</code>.
+  </div>
+  <textarea id="excluded" spellcheck="false" placeholder="claude.ai&#10;mail.google.com"></textarea>
+  <div id="savedSites"></div>
 </div>
 
 <p class="note">

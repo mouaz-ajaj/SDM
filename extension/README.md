@@ -57,6 +57,22 @@ Only `http` and `https` are taken over. A `blob:` or `data:` URL exists nowhere 
 the page that created it, and handing one to SDM would cancel a download that nothing else
 can then perform.
 
+A download that finishes before the handover completes is also left alone. Reaching SDM
+means launching a process and waiting on a pipe, and a small file can be finished by then —
+at which point taking it over would fetch a second copy of a file the browser already has.
+
+## Downloads that cannot be taken over
+
+Some downloads only work inside the browser. An endpoint that answers the request the page
+itself made — checking headers no other program can supply, or a token that was never in a
+cookie — refuses SDM with **403** however complete a session it is given. Application APIs
+do this deliberately, and no download manager can work around it; it is the same reason
+IDM leaves some links alone.
+
+The options page takes a list of hostnames whose downloads stay with the browser. Put such
+a site there and it downloads normally, with everything else still going to SDM. Subdomains
+are included: `claude.ai` also covers `api.claude.ai`.
+
 ## The session travels with the download
 
 Chrome sends your cookies with every download it makes. SDM fetching the same URL from
