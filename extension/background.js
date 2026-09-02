@@ -40,10 +40,60 @@ function install() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(install);
-chrome.runtime.onStartup.addListener(install);
+// ---------------------------------------------------------------------------
+// Listeners, registered first and each on its own
+// ---------------------------------------------------------------------------
+//
+// A service worker registers its listeners by running this file top to bottom. One
+// unguarded call that throws — an API the browser did not grant, a permission still
+// waiting to be accepted after a reload — ends the script there, and every listener
+// below it is silently never registered.
+//
+// That is exactly what happened. chrome.webRequest was set up above the download
+// listener, so when it was unavailable the interception was never installed at all:
+// right-click still worked, because it had been registered earlier, while automatic
+// downloads went on going to Chrome and no request headers were ever captured. One
+// missing permission, two symptoms that looked unrelated, and nothing in the console
+// unless you knew to look for the absence.
+//
+// So each registration now stands alone and says whether it took.
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+register("downloads", () => chrome.downloads.onCreated.addListener(onDownloadCreated));
+
+register("contextMenus", () => {
+  chrome.runtime.onInstalled.addListener(install);
+  chrome.runtime.onStartup.addListener(install);
+  chrome.contextMenus.onClicked.addListener(onMenuClicked);
+});
+
+// Losing this costs the copied headers, and protected downloads with them — but it must
+// not cost the interception itself.
+register("webRequest", () =>
+  chrome.webRequest.onSendHeaders.addListener(
+    (details) => {
+      if (details.requestHeaders) {
+        remember(details.url, details.requestHeaders);
+      }
+    },
+    { urls: ["http://*/*", "https://*/*"] },
+
+    // extraHeaders is required for Cookie and the Sec-* family: without it Chrome hides
+    // exactly the headers that decide whether a protected download is allowed.
+    ["requestHeaders", "extraHeaders"]
+  )
+);
+
+function register(what, addListener) {
+  try {
+    addListener();
+    log("listening:", what);
+  } catch (error) {
+    // Never rethrown: one unavailable API must not take the others down with it.
+    log("NOT LISTENING:", what, "—", String(error));
+  }
+}
+
+function onMenuClicked(info, tab) {
   const menu = MENUS.find((candidate) => candidate.id === info.menuItemId);
 
   if (!menu) {
@@ -65,7 +115,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
         }
       });
   }
-});
+}
 
 // ---------------------------------------------------------------------------
 // Watching what the browser actually sends
@@ -88,19 +138,6 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 // and then evaporated. storage.session survives the worker and is cleared when the browser
 // closes, which is the right lifetime for a request header anyway.
 const RECENT_MS = 120_000;
-
-chrome.webRequest.onSendHeaders.addListener(
-  (details) => {
-    if (details.requestHeaders) {
-      remember(details.url, details.requestHeaders);
-    }
-  },
-  { urls: ["http://*/*", "https://*/*"] },
-
-  // extraHeaders is required for Cookie and the Sec-* family: without it Chrome hides
-  // exactly the headers that decide whether a protected download is allowed.
-  ["requestHeaders", "extraHeaders"]
-);
 
 function keyFor(url) {
   return "req:" + url;
@@ -155,9 +192,12 @@ function log(...parts) {
 // Taking over the browser's own downloads
 // ---------------------------------------------------------------------------
 
-chrome.downloads.onCreated.addListener((item) => {
-  takeOver(item).catch((error) => notify("SDM could not take the download", String(error)));
-});
+function onDownloadCreated(item) {
+  takeOver(item).catch((error) => {
+    log("takeOver threw:", String(error));
+    notify("SDM could not take the download", String(error));
+  });
+}
 
 async function takeOver(item) {
   if (!canTakeOver(item)) {
@@ -249,8 +289,18 @@ async function excluded(url) {
 function canTakeOver(item) {
   const url = item.finalUrl || item.url || "";
 
-  return item.state === "in_progress"
-    && (url.startsWith("https://") || url.startsWith("http://"));
+  // Only what SDM can fetch on its own. A blob: or data: URL exists nowhere but inside the
+  // page that made it.
+  if (!url.startsWith("https://") && !url.startsWith("http://")) {
+    log("not taken over, cannot be refetched:", url);
+    return false;
+  }
+
+  // Deliberately not a check on item.state. onCreated reports whatever state the download
+  // happens to be in at that instant, and one that has already finished is still worth
+  // taking: the copy below is removed once SDM accepts. Requiring "in_progress" here made
+  // every fast download Chrome's.
+  return true;
 }
 
 async function enabled() {
