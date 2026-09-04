@@ -20,6 +20,17 @@ const EXCLUDED = "excludedSites";
 const STATUS = "status";
 const EVENTS = "events";
 
+// And this one for exactly the same reason, which I proved by putting it further down and
+// watching the whole extension die.
+//
+// inTurn() below is a function declaration and hoists; the variable it closes over does
+// not. register() runs before the declaration is reached, so reading it threw
+// ReferenceError inside register's try, the catch called the same code again and threw
+// again — this time out of the catch, out of register, and out of the top level. The
+// service worker then failed to register at all: no listeners, no menu, no interception,
+// and "Status code: 15" on the extensions page.
+let pending = Promise.resolve();
+
 // How recently a download must have started before it counts as one beginning now rather
 // than one the browser restored from history. Seconds, not minutes: the only thing that has
 // to fit inside it is the moment between Chrome creating a download and this listener
@@ -154,8 +165,9 @@ function register(what, addListener) {
 //
 // A panel built to answer "did this actually run?" was answering it wrongly, which is
 // worse than not having one.
-let pending = Promise.resolve();
-
+//
+// `pending` is declared at the top of the file, with the other state register() reaches
+// before this point is ever evaluated.
 function inTurn(work) {
   const next = pending.then(work, work);
 

@@ -103,6 +103,18 @@ No content scripts and no `tabs`: the extension never reads the contents of a pa
 sees the URL being downloaded, the address of the tab it came from, and that site's
 cookies.
 
+## Checking it without a browser
+
+```powershell
+node tools\check-extension.mjs
+```
+
+Loads `background.js` against a stub of the browser API — which is what registering a
+service worker does — and drives one download through it. It catches the faults that
+reach a browser and nothing else: an unrecognised manifest key, a listener that never
+registered, a variable read before its declaration, and a request type left out of the
+header capture. CI runs it on every push.
+
 ## When it does not work
 
 The browser reports almost every failure as "host not found". In order of likelihood:
