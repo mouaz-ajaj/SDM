@@ -210,6 +210,15 @@ function onMenuClicked(info, tab) {
 // protected download still answered 403 after the capture was added: the capture worked,
 // and then evaporated. storage.session survives the worker and is cleared when the browser
 // closes, which is the right lifetime for a request header anyway.
+// chrome.storage.session arrives in Chrome 102, which is what minimum_chrome_version in
+// the manifest says — and why. It used to say 88: between the two the extension installed
+// without complaint and then failed at the first download, with the error swallowed by a
+// catch that exists to keep diagnostics harmless.
+//
+// The note lives here rather than beside the number it explains, because a manifest is
+// JSON and JSON has nowhere to put a sentence. A "_comment" key is not a comment; Chrome
+// reads the whole file and warns about every key it does not recognise, which is a
+// warning on the extensions page for as long as the note is there.
 const RECENT_MS = 120_000;
 
 // How often the expired captures are swept out. Comfortably shorter than RECENT_MS, so
