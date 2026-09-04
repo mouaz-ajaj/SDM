@@ -45,18 +45,35 @@ On by default: someone installing a download manager's extension is asking for i
 download manager. The options page turns it off, and the change applies to the next click
 rather than the next restart.
 
-**A download is paused, not cancelled, until SDM has accepted it.** If the host is
-unregistered, the path is stale, or SDM refuses, the browser's own download is resumed and
-Chrome finishes it, with a notification saying why. Cancelling first would mean one broken
-component silently breaks every download in the browser.
+**The download is caught before Chrome asks where to save it.**
+
+Chrome settles a download name and, if you have "Ask where to save each file" turned on,
+prompts you while doing it. `chrome.downloads.onCreated` fires after that has begun, so
+an extension hooked there can only react to a download the browser has already asked you
+about — two prompts for one file, which is what this used to do.
+
+`onDeterminingFilename` fires during that settling, before the prompt. Taking a download
+there means never letting the name settle, so Chrome never asks.
+
+**The trade is real.** The download has to be cancelled before SDM has agreed to take it,
+because waiting for an answer — which can mean launching SDM and waiting on a pipe — is
+far longer than the moment available. So the guarantee is no longer "nothing is taken from
+Chrome until SDM accepts". It is **"if SDM refuses, the download is handed straight
+back"**, by re-issuing it, with a notification saying why. A re-issued download starts
+again rather than resuming: that is the price of not being asked twice for every file.
+
+A download handed back is recorded, so that when it arrives a second time it is left
+alone. Without that it would be taken, refused, handed back and taken again for as long
+as the browser is open.
 
 Only `http` and `https` are taken over. A `blob:` or `data:` URL exists nowhere but inside
 the page that created it, and handing one to SDM would cancel a download that nothing else
 can then perform.
 
-A download that finishes before the handover completes is also left alone. Reaching SDM
-means launching a process and waiting on a pipe, and a small file can be finished by then —
-at which point taking it over would fetch a second copy of a file the browser already has.
+The race that used to lose small files is gone with the old hook. Catching a download at
+`onCreated` meant the browser was already fetching it, and a small file could finish
+inside the handover — so it arrived twice. At `onDeterminingFilename` not a byte has been
+written yet, because Chrome has not settled where to put them.
 
 ## The real request is copied, not guessed
 

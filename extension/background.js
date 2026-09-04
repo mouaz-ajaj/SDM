@@ -83,7 +83,17 @@ function install() {
 //
 // So each registration now stands alone and says whether it took.
 
-register("downloads", () => chrome.downloads.onCreated.addListener(onDownloadCreated));
+// onDeterminingFilename where it exists, onCreated only where it does not.
+//
+// The two must never both be live: onCreated fires first and onDeterminingFilename
+// second, for the same download, so registering both would hand every file over twice.
+register("downloads", () => {
+  if (chrome.downloads.onDeterminingFilename) {
+    chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilename);
+  } else {
+    chrome.downloads.onCreated.addListener(onDownloadCreated);
+  }
+});
 
 register("contextMenus", () => {
   chrome.runtime.onInstalled.addListener(install);
@@ -274,6 +284,53 @@ function keyFor(url) {
   return "req:" + url;
 }
 
+// ---------------------------------------------------------------------------
+// The loop guard
+// ---------------------------------------------------------------------------
+//
+// A download SDM refuses is handed back by creating it again, which brings it through
+// onDeterminingFilename a second time. Without a record of what was handed back, it would
+// be taken, refused, handed back and taken again for as long as the browser is open.
+//
+// Kept in storage.session rather than a variable for the same reason the captured headers
+// are: a service worker is stopped when idle, and the round trip through SDM is easily
+// long enough for that to happen in the middle of it.
+const HANDED_BACK_MS = 60_000;
+
+function handedBackKeyFor(url) {
+  return "ret:" + url;
+}
+
+async function rememberHandedBack(url) {
+  try {
+    await chrome.storage.session.set({ [handedBackKeyFor(url)]: { at: Date.now() } });
+  } catch (error) {
+    // Losing this risks one extra round trip, not a loop: the entry below is consumed on
+    // sight, so at worst the download is offered to SDM once more and refused again.
+  }
+}
+
+/// True once per hand-back. The record is removed as it is read, so a later download of
+/// the same URL is a new decision rather than one this guard silently skips.
+async function wasHandedBack(url) {
+  const key = handedBackKeyFor(url);
+
+  try {
+    const stored = await chrome.storage.session.get(key);
+    const entry = stored[key];
+
+    if (!entry) {
+      return false;
+    }
+
+    await chrome.storage.session.remove(key);
+
+    return Date.now() - entry.at < HANDED_BACK_MS;
+  } catch (error) {
+    return false;
+  }
+}
+
 async function remember(url, headers) {
   const captured = {};
 
@@ -316,7 +373,14 @@ async function forgetExpired() {
   const stale = [];
 
   for (const [key, value] of Object.entries(everything)) {
-    if (key.startsWith("req:") && (!value || typeof value.at !== "number" || value.at < cutoff)) {
+    const captured = key.startsWith("req:") && (!value || typeof value.at !== "number" || value.at < cutoff);
+
+    // Hand-back records are normally consumed on sight; this clears the ones whose
+    // download never came back — a browser closed mid-handover, say.
+    const handedBack =
+      key.startsWith("ret:") && (!value || typeof value.at !== "number" || value.at < Date.now() - HANDED_BACK_MS);
+
+    if (captured || handedBack) {
       stale.push(key);
     }
   }
@@ -360,6 +424,114 @@ function log(...parts) {
 // ---------------------------------------------------------------------------
 // Taking over the browser's own downloads
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The early hook
+// ---------------------------------------------------------------------------
+//
+// chrome.downloads.onCreated fires after Chrome has decided the response is a download
+// and begun settling its name — and settling the name is when Chrome shows "Where do you
+// want to save this?". Everything done from there is a reaction to a download that
+// already exists and a dialog the user has already been asked. Two prompts for one file.
+//
+// onDeterminingFilename fires during that settling, before the prompt. Returning true
+// promises Chrome that suggest() will be called later; when this takes the download it
+// simply never calls it, and cancels instead. The name is never settled, so the dialog
+// never appears.
+//
+// The price is real and worth stating plainly: the download has to be cancelled before
+// SDM has agreed to take it, because waiting for an answer — which can mean launching
+// SDM and waiting on a pipe — is far longer than the moment available here. So the
+// guarantee changes. It used to be "nothing is taken from Chrome until SDM accepts". It
+// is now "if SDM refuses, the download is handed straight back", by re-issuing it. A
+// re-issued download starts again rather than resuming, which is the cost of not being
+// asked twice for every file.
+function onDeterminingFilename(item, suggest) {
+  if (!canTakeOver(item)) {
+    suggest();
+    return false;
+  }
+
+  // suggest() is called exactly once on every path that gives the download back, and not
+  // at all on the path that takes it. Calling it twice is an error; calling it once after
+  // cancelling would settle a name for a download that no longer exists.
+  intercept(item, suggest).catch((error) => {
+    log("intercept threw:", String(error));
+    notify("SDM could not take the download", String(error));
+  });
+
+  return true;
+}
+
+async function intercept(item, suggest) {
+  const url = item.finalUrl || item.url;
+
+  if (!(await enabled()) || (await excluded(url))) {
+    log("left to Chrome (turned off, or an excluded site):", url);
+    suggest();
+    return;
+  }
+
+  // The loop guard. A download handed back to Chrome is created by us, so it arrives here
+  // again — and without this it would be taken, refused, handed back, and taken again,
+  // for as long as the browser is open.
+  if (await wasHandedBack(url)) {
+    log("this is the copy we just gave back; leaving it alone:", url);
+    suggest();
+    return;
+  }
+
+  const headers = await headersFor(url, item.url);
+
+  // Cancelled and erased before the handover. See above: this is the trade this hook asks
+  // for, and it is the whole reason the dialog does not appear.
+  await chrome.downloads.cancel(item.id).catch(() => {});
+  await chrome.downloads.erase({ id: item.id }).catch(() => {});
+
+  log("took it before Chrome could ask:", url);
+
+  const reply = await handOver(url, item.referrer, headers, suggestedNameFrom(item));
+
+  if (!reply.ok) {
+    log("SDM refused; handing it back to Chrome:", reply.message);
+    await handBack(url, item);
+    notify("SDM did not take the download", reply.message + " Chrome is downloading it instead.");
+    return;
+  }
+
+  log("SDM took it:", url);
+}
+
+/// Gives a refused download back to the browser, which starts it again from the beginning.
+async function handBack(url, item) {
+  // Recorded before the download is created, not after: the new download can reach
+  // onDeterminingFilename before this function's next line runs.
+  await rememberHandedBack(url);
+
+  const request = { url, saveAs: true };
+  const name = suggestedNameFrom(item);
+
+  // download() wants a path relative to the downloads folder and rejects an absolute one,
+  // while the name Chrome proposes here is usually absolute.
+  if (name) {
+    request.filename = name;
+  }
+
+  try {
+    await chrome.downloads.download(request);
+  } catch (error) {
+    log("could not hand the download back:", String(error));
+    notify("The download was lost", "SDM refused it and Chrome would not take it back: " + String(error));
+  }
+}
+
+/// Chrome's own proposed name, which it took from Content-Disposition — better than a URL.
+function suggestedNameFrom(item) {
+  const proposed = item.filename || "";
+  const name = proposed.split(/[\\/]/).pop();
+
+  return name && name !== "." && name !== ".." ? name : undefined;
+}
 
 function onDownloadCreated(item) {
   takeOver(item).catch((error) => {
@@ -514,11 +686,14 @@ async function enabled() {
 // Talking to SDM
 // ---------------------------------------------------------------------------
 
-async function handOver(url, referrer, headers) {
+async function handOver(url, referrer, headers, suggestedName) {
   const message = {
     type: "download",
     url: url,
-    fileName: fileNameFrom(url),
+
+    // What Chrome proposed, which it read from Content-Disposition, in preference to
+    // the last segment of a URL that often ends in an opaque id.
+    fileName: suggestedName || fileNameFrom(url),
     referrer: referrer,
 
     // The real request, when there was one to watch. Everything below is the fallback for

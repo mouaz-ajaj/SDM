@@ -101,6 +101,63 @@ const filters = {};
 const sent = [];
 const notifications = [];
 const downloadCalls = [];
+const handedBack = [];
+
+/// How many times the download we gave back to Chrome settled a name. Exactly one is right.
+let handedBackSuggested = 0;
+
+/// What SDM answers. A test sets this to make the handover fail.
+let handoverReply = { type: "accepted" };
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/// Runs the event loop until everything the extension started has finished.
+///
+/// The listener is called and not awaited — which is what Chrome does — so the work it
+/// starts has to be given room to finish. Handing a refused download back begins a whole
+/// second pass from inside the first one's await chain, and the two share this loop, so
+/// the room needed is considerably more than it looks.
+async function drain(turns = 400) {
+  for (let turn = 0; turn < turns; turn++) {
+    await settle();
+  }
+}
+
+function newItem(url) {
+  return {
+    id: 7,
+    url,
+    finalUrl: url,
+    filename: "holiday.jpg",
+    state: "in_progress",
+    paused: false,
+    startTime: new Date().toISOString(),
+    referrer: "https://example.test/album",
+  };
+}
+
+/// Chrome settling a download's name, which is when it would show its Save As dialog.
+///
+/// `suggest()` completing is what makes the dialog appear, so the check counts the calls:
+/// a download the extension takes must never settle a name, and one it gives back must
+/// settle exactly one.
+/// Hands the download to the listener and returns at once, exactly as Chrome does.
+function fireDownload(item, onSuggest) {
+  if (listeners.onDeterminingFilename) {
+    listeners.onDeterminingFilename(item, onSuggest);
+  } else {
+    listeners.onDownloadCreated(item);
+  }
+}
+
+async function deliverDownload(item) {
+  let suggested = 0;
+
+  fireDownload(item, () => suggested++);
+  await drain();
+
+  return suggested;
+}
 
 // The filter is kept, not discarded. webRequest listeners are registered with one, and
 // which request types it names is the whole question: leaving "image" out is what made
@@ -137,7 +194,7 @@ const chrome = {
     onStartup: slot("onStartup"),
     sendNativeMessage: (host, message, callback) => {
       sent.push({ host, message });
-      callback({ type: "accepted", message: message.url });
+      callback(handoverReply);
     },
   },
   contextMenus: {
@@ -147,11 +204,35 @@ const chrome = {
   },
   downloads: {
     onCreated: slot("onDownloadCreated"),
+    onDeterminingFilename: slot("onDeterminingFilename"),
     pause: async (id) => downloadCalls.push(["pause", id]),
     resume: async (id) => downloadCalls.push(["resume", id]),
     cancel: async (id) => downloadCalls.push(["cancel", id]),
     removeFile: async (id) => downloadCalls.push(["removeFile", id]),
     erase: async (q) => downloadCalls.push(["erase", q.id]),
+
+    // Handing a download back creates a new one, which Chrome then determines a name for
+    // all over again — so the stub does too. Without a guard in the extension that is an
+    // endless loop, and this is what makes the check notice.
+    download: async (request) => {
+      downloadCalls.push(["download", request.url]);
+      handedBack.push(request);
+
+      if (handedBack.length > 8) {
+        throw new Error("hand-back loop");
+      }
+
+      // Fired, not drained. This runs inside the first pass's own await chain, and a
+      // nested drain would race the outer one rather than nest inside it — the outer
+      // would return while this pass was still going and every assertion after it would
+      // read a half-finished state.
+      fireDownload(
+        { ...newItem(request.url), id: 100 + handedBack.length },
+        () => handedBackSuggested++
+      );
+
+      return 1;
+    },
   },
   webRequest: { onSendHeaders: slot("onSendHeaders") },
   cookies: { getAll: async () => [{ name: "session", value: "abc123" }] },
@@ -189,17 +270,21 @@ try {
   problems.push(`${workerPath} threw while being evaluated: ${error}`);
 }
 
-for (const required of ["onDownloadCreated", "onMenuClicked", "onSendHeaders"]) {
+// ---------------------------------------------------------------------------
+// Drive downloads through it
+// ---------------------------------------------------------------------------
+
+for (const required of ["onDeterminingFilename", "onMenuClicked", "onSendHeaders"]) {
   check(listeners[required], `${workerPath}: the ${required} listener was never registered`);
 }
 
-// ---------------------------------------------------------------------------
-// Drive one download through it
-// ---------------------------------------------------------------------------
+check(
+  !listeners.onDownloadCreated,
+  "both onCreated and onDeterminingFilename are registered — they fire for the same "
+    + "download, so every file would be handed over twice"
+);
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-if (listeners.onSendHeaders && listeners.onDownloadCreated) {
+if (listeners.onSendHeaders && listeners.onDeterminingFilename) {
   const url = "https://example.test/photos/holiday.jpg";
 
   // A page loading a picture. This is the only request that will ever be made for it:
@@ -223,18 +308,9 @@ if (listeners.onSendHeaders && listeners.onDownloadCreated) {
 
   await settle();
 
-  await listeners.onDownloadCreated({
-    id: 7,
-    url,
-    finalUrl: url,
-    state: "in_progress",
-    paused: false,
-    startTime: new Date().toISOString(),
-    referrer: "https://example.test/album",
-  });
+  // ---- SDM accepts ----
 
-  await settle();
-  await settle();
+  const suggested = await deliverDownload(newItem(url));
 
   const handover = sent.at(-1);
 
@@ -242,17 +318,69 @@ if (listeners.onSendHeaders && listeners.onDownloadCreated) {
     check(handover.message.url === url, "the wrong URL was handed over");
     check(
       handover.message.headers?.["anthropic-client-version"] === "web_1.2.3",
-      "the real request's headers were not carried over — check the webRequest type filter"
+      "the real request headers were not carried over — check the webRequest type filter"
     );
     check(
-      downloadCalls.some(([call]) => call === "pause"),
-      "the browser's own download was not paused before the handover"
-    );
-    check(
-      downloadCalls.some(([call]) => call === "cancel"),
-      "SDM accepted the download and the browser's copy was not cancelled"
+      handover.message.fileName === "holiday.jpg",
+      "the name Chrome read from Content-Disposition was not passed on"
     );
   }
+
+  // The whole point of the early hook. Settling a name is what makes Chrome show its
+  // "where do you want to save this?" dialog, so a download SDM takes must never settle
+  // one — that is the second prompt the user was being asked for every single file.
+  check(
+    suggested === 0,
+    "the download SDM took still settled a filename, so Chrome would have shown its save dialog"
+  );
+
+  check(
+    downloadCalls.some(([call]) => call === "cancel"),
+    "the browser copy was not cancelled"
+  );
+  check(
+    downloadCalls.some(([call]) => call === "erase"),
+    "the cancelled download was left in the browser list beside the working one"
+  );
+
+  // ---- SDM refuses ----
+
+  handoverReply = { type: "error", message: "SDM is closing." };
+  sent.length = 0;
+  downloadCalls.length = 0;
+
+  const refusedSuggested = await deliverDownload(newItem(url));
+
+  // The refused download was still taken from Chrome before SDM answered — that is what
+  // the early hook costs — so it must not settle a name either.
+  check(
+    refusedSuggested === 0,
+    "the download SDM refused settled a filename before being handed back"
+  );
+
+  check(
+    downloadCalls.some(([call]) => call === "download"),
+    "SDM refused the download and it was not handed back — the file is simply lost"
+  );
+
+  // The loop guard. Handing a download back creates a new one, which arrives here again;
+  // without a record of what was given back it is taken, refused, given back and taken
+  // again for as long as the browser is open.
+  check(
+    handedBack.length === 1,
+    `the refused download was handed back ${handedBack.length} times — the loop guard is not holding`
+  );
+
+  // The other half: a download given back has to finish being created, and Chrome cannot
+  // finish creating it until a name is settled. Never calling suggest() there would leave
+  // it stuck for ever — the file lost by the very path that exists to save it.
+  check(
+    handedBackSuggested === 1,
+    `the download handed back to Chrome settled its name ${handedBackSuggested} times, `
+      + "and it must settle exactly once or Chrome never finishes creating it"
+  );
+
+  check(notifications.length > 0, "SDM refused a download and the user was told nothing");
 
   // The diagnostics have to survive three registrations racing each other.
   const status = (await session.get("status")).status ?? {};
@@ -261,7 +389,7 @@ if (listeners.onSendHeaders && listeners.onDownloadCreated) {
     check(status[key] === "ok", `the status panel reports "${key}" as ${status[key] ?? "not started"}`);
   }
 
-  notes.push(`handed over ${sent.length} download(s); status reports ${Object.keys(status).length - 1} listeners`);
+  notes.push("took one download before Chrome could ask, and handed one refused download back");
 }
 
 // ---------------------------------------------------------------------------
