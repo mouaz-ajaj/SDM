@@ -11,6 +11,8 @@ public static class DependencyInjection
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddSingleton<IUiThread, AvaloniaUiThread>();
+
         services.AddSingleton<StorageProviderFolderPicker>();
         services.AddSingleton<IFolderPicker>(
             provider => provider.GetRequiredService<StorageProviderFolderPicker>());

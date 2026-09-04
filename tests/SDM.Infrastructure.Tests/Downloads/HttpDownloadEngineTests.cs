@@ -316,6 +316,17 @@ public sealed class HttpDownloadEngineTests : IDisposable
         Assert.Equal(0, plan!.ResumedFrom);
         Assert.Equal(PayloadSize, result.BytesWritten);
         Assert.Equal(Hash(_payload), Hash(written));
+
+        // The bytes being right was never the whole question. The partial file this
+        // attempt could not use has to go with it: an existing ".part" counts as an
+        // occupied name, so leaving it saved the download as "ignores-range (1).bin" and
+        // left the original behind — and the attempt after that found the same stale
+        // sidecar and produced "(2)", for as long as the server kept refusing ranges.
+        Assert.Equal(Path.Combine(_workingDirectory, "ignores-range.bin"), result.DestinationPath);
+
+        Assert.Equal(
+            ["ignores-range.bin"],
+            Directory.GetFiles(_workingDirectory).Select(path => Path.GetFileName(path)).Order(StringComparer.Ordinal).ToArray());
     }
 
     [Fact]

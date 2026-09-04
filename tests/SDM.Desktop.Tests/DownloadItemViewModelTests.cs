@@ -89,7 +89,7 @@ public sealed class DownloadItemViewModelTests
     public void Restore_GivesBackAFolderTheUserChose()
     {
         DownloadItemViewModel item = DownloadItemViewModel.Restore(
-            new FakeScheduler(), new FakeRepository(), new FakeShell(), NullLogger.Instance,
+            new FakeScheduler(), new FakeRepository(), new FakeShell(), new ImmediateUiThread(), NullLogger.Instance,
             NewJob() with
             {
                 DestinationPath = @"D:\Work\report.pdf",
@@ -111,7 +111,7 @@ public sealed class DownloadItemViewModelTests
         FakeScheduler scheduler = new();
 
         DownloadItemViewModel item = DownloadItemViewModel.Restore(
-            scheduler, new FakeRepository(), new FakeShell(), NullLogger.Instance,
+            scheduler, new FakeRepository(), new FakeShell(), new ImmediateUiThread(), NullLogger.Instance,
             NewJob() with
             {
                 // Where SDM sorted it, not where anyone asked for it.
@@ -136,7 +136,7 @@ public sealed class DownloadItemViewModelTests
     {
         FakeRepository repository = new();
         DownloadItemViewModel item = DownloadItemViewModel.Create(
-            new FakeScheduler(), repository, new FakeShell(), NullLogger.Instance,
+            new FakeScheduler(), repository, new FakeShell(), new ImmediateUiThread(), NullLogger.Instance,
             "https://example.test/file.bin",
             new DownloadDestination(@"D:\Work", "file.bin"));
 
@@ -149,7 +149,7 @@ public sealed class DownloadItemViewModelTests
     public void Create_PrefersTheNameTheBrowserAlreadyKnew()
     {
         DownloadItemViewModel item = DownloadItemViewModel.Create(
-            new FakeScheduler(), new FakeRepository(), new FakeShell(), NullLogger.Instance,
+            new FakeScheduler(), new FakeRepository(), new FakeShell(), new ImmediateUiThread(), NullLogger.Instance,
             "https://example.test/download?id=8f21c0",
             suggestedFileName: "Quarterly report.pdf");
 
@@ -161,16 +161,204 @@ public sealed class DownloadItemViewModelTests
     public void Create_SanitisesTheNameTheBrowserSent()
     {
         DownloadItemViewModel item = DownloadItemViewModel.Create(
-            new FakeScheduler(), new FakeRepository(), new FakeShell(), NullLogger.Instance,
+            new FakeScheduler(), new FakeRepository(), new FakeShell(), new ImmediateUiThread(), NullLogger.Instance,
             "https://example.test/download",
             suggestedFileName: @"../../escaped.txt");
 
         Assert.Equal("escaped.txt", item.FileName);
     }
 
+    [Fact]
+    public async Task OnPlanned_FillsInEverythingTheServerJustSaid()
+    {
+        FakeScheduler scheduler = new()
+        {
+            OnEnqueue = (callbacks, _) =>
+            {
+                callbacks?.Started?.Invoke();
+                callbacks?.Planned?.Invoke(
+                    new DownloadPlan(@"C:\Downloads\Video\real-name.mp4", 4096, 0, true, 3)
+                    {
+                        MediaType = "video/mp4",
+                        Category = FileCategory.Video,
+                    });
+
+                return Task.FromResult(
+                    new DownloadResult(@"C:\Downloads\Video\real-name.mp4", 4096)
+                    {
+                        MediaType = "video/mp4",
+                        Category = FileCategory.Video,
+                    });
+            },
+        };
+
+        DownloadItemViewModel item = Create(scheduler);
+
+        await item.RunAsync();
+
+        // None of this was covered before the marshaller was injected: the callbacks were
+        // posted to a dispatcher no test pumps, so they never ran and every assertion
+        // about them would have passed against a row that had not been told anything.
+        Assert.Equal("video/mp4", item.MediaTypeText);
+        Assert.Equal("4 KB", item.SizeText);
+        Assert.Equal("Video", item.CategoryName);
+        Assert.StartsWith("Yes", item.ResumeText, StringComparison.Ordinal);
+        Assert.Equal(3, item.ConnectionCount);
+        Assert.Contains(item.History, entry => entry.Text.Contains("3 connections", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task StatusText_SaysHowManyConnectionsAreRunningWhileTheyAre()
+    {
+        TaskCompletionSource planned = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        FakeScheduler scheduler = new()
+        {
+            OnEnqueue = (callbacks, token) =>
+            {
+                callbacks?.Started?.Invoke();
+                callbacks?.Planned?.Invoke(new DownloadPlan(@"C:\Downloads\big.iso", 1 << 30, 0, true, 4));
+                planned.SetResult();
+                return FakeScheduler.BlockUntilCancelledAsync(token);
+            },
+        };
+
+        DownloadItemViewModel item = Create(scheduler);
+        _ = item.RunAsync();
+        await planned.Task;
+
+        // The status column could only ever read "Downloading", because the property this
+        // branch tests was a string nothing assigned. The detail panel's Connections field
+        // was blank for the same reason.
+        Assert.Equal("4 connections", item.StatusText);
+        Assert.Equal("4 running at once", item.ConnectionsText);
+
+        await item.StopAndWaitAsync(keepPartialFile: true);
+    }
+
+    [Fact]
+    public async Task StatusText_DoesNotClutterTheColumnForAnUnsplitTransfer()
+    {
+        TaskCompletionSource planned = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        FakeScheduler scheduler = new()
+        {
+            OnEnqueue = (callbacks, token) =>
+            {
+                callbacks?.Started?.Invoke();
+                callbacks?.Planned?.Invoke(new DownloadPlan(@"C:\Downloads\small.txt", 900, 0, false, 1));
+                planned.SetResult();
+                return FakeScheduler.BlockUntilCancelledAsync(token);
+            },
+        };
+
+        DownloadItemViewModel item = Create(scheduler);
+        _ = item.RunAsync();
+        await planned.Task;
+
+        Assert.Equal("Downloading", item.StatusText);
+        Assert.Equal("1 — this file is not split", item.ConnectionsText);
+
+        // A server that refuses ranges cannot be paused, only cancelled.
+        Assert.False(item.ServerSupportsResume);
+        Assert.False(item.PauseCommand.CanExecute(null));
+
+        await item.StopAndWaitAsync(keepPartialFile: true);
+    }
+
+    [Fact]
+    public async Task OnRetry_SaysWhichAttemptIsComingAndWhy()
+    {
+        FakeScheduler scheduler = new()
+        {
+            OnEnqueue = (callbacks, _) =>
+            {
+                callbacks?.Started?.Invoke();
+                callbacks?.Retrying?.Invoke(
+                    new DownloadRetry(2, 4, TimeSpan.FromSeconds(3), "Server answered 503 ServiceUnavailable"));
+
+                return Task.FromResult(new DownloadResult(@"C:\Downloads\file.bin", 10));
+            },
+        };
+
+        DownloadItemViewModel item = Create(scheduler);
+        TaskCompletionSource<string> whileRetrying = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        item.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(DownloadItemViewModel.RetryText) && item.RetryText.Length > 0)
+            {
+                whileRetrying.TrySetResult(item.StatusText);
+            }
+        };
+
+        await item.RunAsync();
+
+        // "Queued behind other transfers" and "this one just failed and is about to try
+        // again" both used to read as "Queued", with the reason out of sight.
+        Assert.Equal("Retry 2/4", await whileRetrying.Task);
+        Assert.Equal(DownloadStatus.Completed, item.Status);
+    }
+
+    [Fact]
+    public async Task OnVerifying_StopsClaimingASpeedOnceTheLastByteIsIn()
+    {
+        TaskCompletionSource verifying = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        FakeScheduler scheduler = new()
+        {
+            OnEnqueue = (callbacks, token) =>
+            {
+                callbacks?.Started?.Invoke();
+                callbacks?.Planned?.Invoke(new DownloadPlan(@"C:\Downloads\big.iso", 4096, 0, true, 1));
+                callbacks?.Verifying?.Invoke();
+                verifying.SetResult();
+                return FakeScheduler.BlockUntilCancelledAsync(token);
+            },
+        };
+
+        DownloadItemViewModel item = Create(scheduler);
+        _ = item.RunAsync();
+        await verifying.Task;
+
+        // A large file is not moved into place instantly, and leaving the speed and the
+        // estimate on screen is what made a transfer waiting on the disk look stalled.
+        Assert.Equal("Verifying", item.StatusText);
+        Assert.Equal(string.Empty, item.SpeedText);
+        Assert.Equal(string.Empty, item.RemainingText);
+
+        await item.StopAndWaitAsync(keepPartialFile: true);
+    }
+
+    [Fact]
+    public async Task History_DoesNotGrowForEverAcrossManyAttempts()
+    {
+        FakeScheduler scheduler = new()
+        {
+            OnEnqueue = (callbacks, _) =>
+            {
+                callbacks?.Planned?.Invoke(new DownloadPlan(@"C:\Downloads\file.bin", 10, 0, true, 1));
+                return Task.FromResult(new DownloadResult(@"C:\Downloads\file.bin", 10));
+            },
+        };
+
+        DownloadItemViewModel item = Create(scheduler);
+
+        // A row paused and resumed all afternoon writes two lines per attempt, and nothing
+        // ever removed one.
+        for (int attempt = 0; attempt < 200; attempt++)
+        {
+            await item.RunAsync();
+        }
+
+        Assert.True(
+            item.History.Count <= 200,
+            $"The history kept {item.History.Count} entries and is only ever appended to.");
+    }
+
     private static DownloadItemViewModel Create(FakeScheduler scheduler) =>
         DownloadItemViewModel.Create(
-            scheduler, new FakeRepository(), new FakeShell(), NullLogger.Instance,
+            scheduler, new FakeRepository(), new FakeShell(), new ImmediateUiThread(), NullLogger.Instance,
             "https://example.test/file.bin");
 
     private static DownloadJob NewJob() => new()

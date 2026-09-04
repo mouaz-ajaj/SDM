@@ -30,6 +30,9 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string _pipeName;
 
+    /// <summary>Connections being answered right now, so shutdown can let them finish.</summary>
+    private readonly List<Task> _inFlight = [];
+
     private Task? _acceptLoop;
 
     /// <summary>
@@ -117,7 +120,17 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
             // client that connected and then said nothing — a native host killed mid-
             // handover is enough — held the whole bridge until SDM was restarted. No
             // download from any browser got through in the meantime.
-            _ = ServeAndDisposeAsync(server, cancellationToken);
+            //
+            // Tracked rather than abandoned, so that shutdown can give a request that is
+            // mid-answer the moment it needs. Without that a browser could be told
+            // nothing at all, having been told to wait.
+            Task serving = ServeAndDisposeAsync(server, cancellationToken);
+
+            lock (_inFlight)
+            {
+                _inFlight.Add(serving);
+                _inFlight.RemoveAll(task => task.IsCompleted);
+            }
         }
     }
 
@@ -342,6 +355,30 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
             catch (TimeoutException)
             {
                 _logger.LogWarning("The browser bridge did not stop within {Timeout}.", ShutdownTimeout);
+            }
+        }
+
+        // Requests already being answered get the rest of that budget. They were told to
+        // wait for a reply, and disposing the bridge underneath one leaves the browser
+        // with a connection that closed saying nothing.
+        Task[] remaining;
+
+        lock (_inFlight)
+        {
+            remaining = [.. _inFlight.Where(task => !task.IsCompleted)];
+        }
+
+        if (remaining.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(remaining).WaitAsync(ShutdownTimeout).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is TimeoutException or IOException)
+            {
+                _logger.LogWarning(
+                    "{Count} browser bridge connection(s) were still being answered at shutdown.",
+                    remaining.Length);
             }
         }
 

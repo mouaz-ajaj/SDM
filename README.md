@@ -95,7 +95,7 @@ dotnet build SDM.sln --configuration Release --no-restore
 dotnet test  SDM.sln --configuration Release --no-build
 ```
 
-Warnings are errors here, and the suite is 202 tests. Tests that need a server run against
+Warnings are errors here, and the suite is 208 tests. Tests that need a server run against
 a local `HttpListener`, never the public internet.
 
 ## Run

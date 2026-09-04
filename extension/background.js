@@ -90,15 +90,20 @@ register("webRequest", () =>
       }
     },
 
-    // Only the request types a download can come from. This listener used to watch every
-    // request the browser made — every page, stylesheet, script, font, image and XHR, on
-    // every tab — and write each one's headers to storage. That is a write per request
-    // for the whole time the browser is open, and none of it could ever be read back: a
-    // download is a top-level navigation or a click on a link, never a stylesheet.
+    // The request types a download can come out of. Not a stylesheet, a script, a font
+    // or an image: watching every request the browser made meant a write to storage for
+    // each one, all session, and none of those could ever be read back.
     //
-    // It also meant the Cookie and Authorization header of every site visited sat in one
-    // store for the life of the session, to make one download work.
-    { urls: ["http://*/*", "https://*/*"], types: ["main_frame", "sub_frame", "object", "other"] },
+    // xmlhttprequest stays in, and narrowing it out was a mistake worth naming. It is the
+    // type this whole capture exists for: an application's own API answers the request
+    // its page made, and what makes that request acceptable is often a header nobody
+    // outside the site could name. Dropping it would have quietly undone the feature
+    // while looking like a tidy-up — and the growth it was meant to fix is bounded by the
+    // sweep below, not by this list.
+    {
+      urls: ["http://*/*", "https://*/*"],
+      types: ["main_frame", "sub_frame", "xmlhttprequest", "object", "other"],
+    },
 
     // extraHeaders is required for Cookie and the Sec-* family: without it Chrome hides
     // exactly the headers that decide whether a protected download is allowed.

@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -36,6 +35,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly ISaveLocationPicker _picker;
     private readonly IAppDialogs _dialogs;
     private readonly ISystemShell _shell;
+    private readonly IUiThread _ui;
     private readonly IOptionsMonitor<DownloadOptions> _options;
     private readonly IBrowserBridge _bridge;
     private readonly ILogger<MainWindowViewModel> _logger;
@@ -73,6 +73,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ISaveLocationPicker picker,
         IAppDialogs dialogs,
         ISystemShell shell,
+        IUiThread ui,
         IOptionsMonitor<DownloadOptions> options,
         IBrowserBridge bridge,
         ILogger<MainWindowViewModel> logger)
@@ -84,6 +85,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(picker);
         ArgumentNullException.ThrowIfNull(dialogs);
         ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(ui);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(bridge);
         ArgumentNullException.ThrowIfNull(logger);
@@ -95,6 +97,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _picker = picker;
         _dialogs = dialogs;
         _shell = shell;
+        _ui = ui;
         _options = options;
         _bridge = bridge;
         _logger = logger;
@@ -141,7 +144,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             foreach (DownloadJob job in await _repository.GetAllAsync())
             {
-                Track(DownloadItemViewModel.Restore(_scheduler, _repository, _shell, _logger, job));
+                Track(DownloadItemViewModel.Restore(_scheduler, _repository, _shell, _ui, _logger, job));
             }
 
             _logger.LogInformation("Restored {Count} transfers from the previous session.", All.Count);
@@ -179,7 +182,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// own thread, so the window is touched from the interface thread.
     /// </summary>
     private void OnShowRequest(object? sender, EventArgs e) =>
-        Dispatcher.UIThread.Post(() => ShowRequested?.Invoke(this, EventArgs.Empty));
+        _ui.Invoke(() => ShowRequested?.Invoke(this, EventArgs.Empty));
 
     /// <summary>
     /// Asks the window to bring itself forward. The view model does not own the window
@@ -198,7 +201,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        _ui.Invoke(() =>
         {
             if (AlreadyInFlight(url) is { } existing)
             {
@@ -209,7 +212,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
 
             DownloadItemViewModel item = DownloadItemViewModel.Create(
-                _scheduler, _repository, _shell, _logger, url,
+                _scheduler, _repository, _shell, _ui, _logger, url,
                 context: message.ToRequestContext(),
                 suggestedFileName: message.FileName);
 
@@ -281,7 +284,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Address = string.Empty;
 
         DownloadItemViewModel item = DownloadItemViewModel.Create(
-            _scheduler, _repository, _shell, _logger, address, destination);
+            _scheduler, _repository, _shell, _ui, _logger, address, destination);
 
         Track(item, atTop: true);
         Selected = item;

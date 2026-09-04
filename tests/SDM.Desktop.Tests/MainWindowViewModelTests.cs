@@ -204,6 +204,7 @@ public sealed class MainWindowViewModelTests
                 new FakeSaveLocationPicker(),
                 Dialogs,
                 new FakeShell(),
+                new ImmediateUiThread(),
                 new StaticOptions<DownloadOptions>(new DownloadOptions()),
                 Bridge,
                 NullLogger<MainWindowViewModel>.Instance);

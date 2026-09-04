@@ -179,6 +179,25 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         bool resuming = ranged && streamResumeFrom > 0;
         long resumeFrom = resuming ? streamResumeFrom : 0;
 
+        // A partial file that is about to be abandoned is thrown away here, before the
+        // name is settled.
+        //
+        // It can never be continued: this transfer asked for a range and was answered
+        // with the whole file, so either the server has stopped honouring ranges or
+        // If-Range decided the resource changed. Left behind, it was worse than clutter —
+        // an existing ".part" counts as an occupied name, so the fresh download was saved
+        // as "file (1).bin" while "file.bin.part" sat there for ever. The next attempt
+        // then found the same stale sidecar, was answered 200 again, and produced
+        // "file (2).bin", and so on for as long as the server kept refusing.
+        if (existing is not null && !resuming)
+        {
+            _logger.LogWarning(
+                "Discarding an unusable partial file for {Source}: the server sent the whole file where a range was asked for.",
+                request.Source);
+
+            PartialFile.Delete(existing.PartialPath);
+        }
+
         string? mediaType = response.Content.Headers.ContentType?.MediaType;
 
         string destination = resuming && existing is not null

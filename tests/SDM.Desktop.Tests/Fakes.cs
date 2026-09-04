@@ -91,6 +91,19 @@ internal sealed class FakeRepository : IDownloadRepository
     }
 }
 
+/// <summary>
+/// Runs callbacks where they are raised, so a test sees what they set.
+///
+/// The real one hops to Avalonia dispatcher. A test process has no dispatcher pumping,
+/// so posted work never ran at all — and every assertion about what the engine callbacks
+/// set was passing by never being reached. This is the whole reason the marshaller is
+/// injected rather than called directly.
+/// </summary>
+internal sealed class ImmediateUiThread : IUiThread
+{
+    public void Invoke(Action action) => action();
+}
+
 internal sealed class FakeShell : ISystemShell
 {
     public bool Open(string path) => true;
