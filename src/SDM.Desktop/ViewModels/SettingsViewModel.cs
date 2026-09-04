@@ -182,6 +182,12 @@ public sealed partial class SettingsViewModel : ObservableObject
             return false;
         }
 
+        if (!CanWriteTo(DownloadFolder.Trim(), out string? reason))
+        {
+            problem = reason;
+            return false;
+        }
+
         if (MaximumConcurrent is < 1 or > 16)
         {
             problem = "Transfers at once must be between 1 and 16.";
@@ -220,5 +226,40 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         problem = null;
         return true;
+    }
+
+    /// <summary>
+    /// Proves the folder can actually be written to, by writing to it.
+    ///
+    /// Nothing checked this. A path on a drive that is no longer plugged in, a typo, or a
+    /// folder the user has no rights to was accepted without complaint — and then every
+    /// download failed, one at a time, with a message about the transfer rather than
+    /// about the setting that caused it. A setting that cannot work should be refused
+    /// where it is entered.
+    ///
+    /// The folder is created if it is missing, because that is what saving a new download
+    /// folder means, and a probe file is written and removed: existing is not the same as
+    /// writable, and on Windows only an attempted write can tell them apart.
+    /// </summary>
+    private static bool CanWriteTo(string folder, out string? problem)
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(folder);
+
+            string probe = System.IO.Path.Combine(folder, $".sdm-write-test-{Guid.NewGuid():N}");
+            File.WriteAllBytes(probe, []);
+            File.Delete(probe);
+
+            problem = null;
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or ArgumentException
+                or NotSupportedException)
+        {
+            problem = $"That folder cannot be written to: {exception.Message}";
+            return false;
+        }
     }
 }

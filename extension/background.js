@@ -20,6 +20,17 @@ const EXCLUDED = "excludedSites";
 const STATUS = "status";
 const EVENTS = "events";
 
+// And this one for exactly the same reason, which I proved by putting it further down and
+// watching the whole extension die.
+//
+// inTurn() below is a function declaration and hoists; the variable it closes over does
+// not. register() runs before the declaration is reached, so reading it threw
+// ReferenceError inside register's try, the catch called the same code again and threw
+// again — this time out of the catch, out of register, and out of the top level. The
+// service worker then failed to register at all: no listeners, no menu, no interception,
+// and "Status code: 15" on the extensions page.
+let pending = Promise.resolve();
+
 // How recently a download must have started before it counts as one beginning now rather
 // than one the browser restored from history. Seconds, not minutes: the only thing that has
 // to fit inside it is the moment between Chrome creating a download and this listener
@@ -72,7 +83,17 @@ function install() {
 //
 // So each registration now stands alone and says whether it took.
 
-register("downloads", () => chrome.downloads.onCreated.addListener(onDownloadCreated));
+// onDeterminingFilename where it exists, onCreated only where it does not.
+//
+// The two must never both be live: onCreated fires first and onDeterminingFilename
+// second, for the same download, so registering both would hand every file over twice.
+register("downloads", () => {
+  if (chrome.downloads.onDeterminingFilename) {
+    chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilename);
+  } else {
+    chrome.downloads.onCreated.addListener(onDownloadCreated);
+  }
+});
 
 register("contextMenus", () => {
   chrome.runtime.onInstalled.addListener(install);
@@ -86,16 +107,42 @@ register("webRequest", () =>
   chrome.webRequest.onSendHeaders.addListener(
     (details) => {
       if (details.requestHeaders) {
-        remember(details.url, details.requestHeaders);
+        remember(details.url, details.requestHeaders, details.method);
       }
     },
-    { urls: ["http://*/*", "https://*/*"] },
+
+    // The request types something downloadable can arrive as. A stylesheet, a script, a
+    // font or a ping cannot become a download, and watching those meant a write to
+    // storage for every one of them, all session, that could never be read back.
+    //
+    // Everything else stays, and trimming this list twice taught the same lesson twice.
+    // xmlhttprequest is what an application's own API answers, with headers nobody
+    // outside the site could name. image and media are what "Save image as" and "Save
+    // video as" act on — and those are the case that fails hardest, because the picture
+    // is usually already in the cache, so saving it makes no fresh request at all: the
+    // only capture that will ever exist is the one from when the page loaded it. Leaving
+    // image out is why every attempt at saving a picture reported no captured headers.
+    //
+    // The storage this was meant to bound is bounded by the sweep below, not by this
+    // list. Narrowing the list was solving the wrong half.
+    {
+      urls: ["http://*/*", "https://*/*"],
+      types: ["main_frame", "sub_frame", "xmlhttprequest", "image", "media", "object", "other"],
+    },
 
     // extraHeaders is required for Cookie and the Sec-* family: without it Chrome hides
     // exactly the headers that decide whether a protected download is allowed.
     ["requestHeaders", "extraHeaders"]
   )
 );
+
+// Every method is recorded, not only GET.
+//
+// The method used to be a filter here, which threw away the one fact that says a download
+// cannot be taken: a file answering a POST cannot be fetched again by asking for it, and
+// neither SDM nor a hand-back to Chrome can reproduce it. Discarding those captures left
+// a POST download indistinguishable from an image served out of the cache — both simply
+// had nothing recorded — so the one that had to be left alone was taken anyway.
 
 function register(what, addListener) {
   try {
@@ -119,31 +166,61 @@ function register(what, addListener) {
 // reads what is written here, so the next question is answered by looking rather than by
 // another guess.
 
-async function setStatus(what, state) {
-  try {
-    const stored = await chrome.storage.session.get(STATUS);
-    const status = stored[STATUS] || {};
+// Every read-modify-write on session storage queues behind the last one.
+//
+// Without this the diagnostics lied, and lied in the most misleading way available. The
+// three register() calls run one after another with nothing awaited between them, so all
+// three read the status object at the same moment — before any of them had written — each
+// added its own key to that same empty object, and each wrote the whole thing back. Last
+// writer won. Two listeners that had registered perfectly well reported "not started",
+// and the activity log lost most of its lines the same way.
+//
+// A panel built to answer "did this actually run?" was answering it wrongly, which is
+// worse than not having one.
+//
+// `pending` is declared at the top of the file, with the other state register() reaches
+// before this point is ever evaluated.
+function inTurn(work) {
+  const next = pending.then(work, work);
 
-    status[what] = state;
-    status.startedAt = new Date().toISOString();
+  // The chain itself must never end up rejected, or every later turn is skipped.
+  pending = next.then(
+    () => undefined,
+    () => undefined
+  );
 
-    await chrome.storage.session.set({ [STATUS]: status });
-  } catch (error) {
-    // Nothing to do: this is the diagnostics, not the feature.
-  }
+  return next;
 }
 
-async function record(line) {
-  try {
-    const stored = await chrome.storage.session.get(EVENTS);
-    const events = stored[EVENTS] || [];
+function setStatus(what, state) {
+  return inTurn(async () => {
+    try {
+      const stored = await chrome.storage.session.get(STATUS);
+      const status = stored[STATUS] || {};
 
-    events.push(new Date().toLocaleTimeString() + "  " + line);
+      status[what] = state;
+      status.startedAt = new Date().toISOString();
 
-    await chrome.storage.session.set({ [EVENTS]: events.slice(-60) });
-  } catch (error) {
-    // Same.
-  }
+      await chrome.storage.session.set({ [STATUS]: status });
+    } catch (error) {
+      // Nothing to do: this is the diagnostics, not the feature.
+    }
+  });
+}
+
+function record(line) {
+  return inTurn(async () => {
+    try {
+      const stored = await chrome.storage.session.get(EVENTS);
+      const events = stored[EVENTS] || [];
+
+      events.push(new Date().toLocaleTimeString() + "  " + line);
+
+      await chrome.storage.session.set({ [EVENTS]: events.slice(-60) });
+    } catch (error) {
+      // Same.
+    }
+  });
 }
 
 function onMenuClicked(info, tab) {
@@ -190,13 +267,73 @@ function onMenuClicked(info, tab) {
 // protected download still answered 403 after the capture was added: the capture worked,
 // and then evaporated. storage.session survives the worker and is cleared when the browser
 // closes, which is the right lifetime for a request header anyway.
+// chrome.storage.session arrives in Chrome 102, which is what minimum_chrome_version in
+// the manifest says — and why. It used to say 88: between the two the extension installed
+// without complaint and then failed at the first download, with the error swallowed by a
+// catch that exists to keep diagnostics harmless.
+//
+// The note lives here rather than beside the number it explains, because a manifest is
+// JSON and JSON has nowhere to put a sentence. A "_comment" key is not a comment; Chrome
+// reads the whole file and warns about every key it does not recognise, which is a
+// warning on the extensions page for as long as the note is there.
 const RECENT_MS = 120_000;
+
+// How often the expired captures are swept out. Comfortably shorter than RECENT_MS, so
+// nothing lingers long past the point it could be used.
+const SWEEP_EVERY_MS = 30_000;
 
 function keyFor(url) {
   return "req:" + url;
 }
 
-async function remember(url, headers) {
+// ---------------------------------------------------------------------------
+// The loop guard
+// ---------------------------------------------------------------------------
+//
+// A download SDM refuses is handed back by creating it again, which brings it through
+// onDeterminingFilename a second time. Without a record of what was handed back, it would
+// be taken, refused, handed back and taken again for as long as the browser is open.
+//
+// Kept in storage.session rather than a variable for the same reason the captured headers
+// are: a service worker is stopped when idle, and the round trip through SDM is easily
+// long enough for that to happen in the middle of it.
+const HANDED_BACK_MS = 60_000;
+
+function handedBackKeyFor(url) {
+  return "ret:" + url;
+}
+
+async function rememberHandedBack(url) {
+  try {
+    await chrome.storage.session.set({ [handedBackKeyFor(url)]: { at: Date.now() } });
+  } catch (error) {
+    // Losing this risks one extra round trip, not a loop: the entry below is consumed on
+    // sight, so at worst the download is offered to SDM once more and refused again.
+  }
+}
+
+/// True once per hand-back. The record is removed as it is read, so a later download of
+/// the same URL is a new decision rather than one this guard silently skips.
+async function wasHandedBack(url) {
+  const key = handedBackKeyFor(url);
+
+  try {
+    const stored = await chrome.storage.session.get(key);
+    const entry = stored[key];
+
+    if (!entry) {
+      return false;
+    }
+
+    await chrome.storage.session.remove(key);
+
+    return Date.now() - entry.at < HANDED_BACK_MS;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function remember(url, headers, method) {
   const captured = {};
 
   for (const header of headers) {
@@ -206,15 +343,63 @@ async function remember(url, headers) {
   }
 
   try {
-    await chrome.storage.session.set({ [keyFor(url)]: { headers: captured, at: Date.now() } });
+    await chrome.storage.session.set({ [keyFor(url)]: { headers: captured, method, at: Date.now() } });
+    await forgetExpired();
   } catch (error) {
     // Session storage has a size cap. Losing one capture is not worth failing a download.
   }
 }
 
+// Nothing ever removed a capture. RECENT_MS was applied when reading, so a stale entry
+// was ignored — and kept, along with every other entry, until the browser closed. Each
+// one holds a full header set including the Cookie, so the store grew all session and
+// eventually hit the quota, at which point new captures failed silently and protected
+// downloads went back to answering 403 for no visible reason.
+//
+// Swept on write rather than on a timer: a service worker is stopped when idle, so a
+// timer is not something this file may rely on, and the only moment the store grows is
+// the moment something is added to it.
+// Reading the whole store to sweep it is not something to do on every capture. This
+// resets whenever the worker is stopped, which costs one extra sweep and nothing else.
+let sweptAt = 0;
+
+async function forgetExpired() {
+  if (Date.now() - sweptAt < SWEEP_EVERY_MS) {
+    return;
+  }
+
+  sweptAt = Date.now();
+
+  const everything = await chrome.storage.session.get(null);
+  const cutoff = Date.now() - RECENT_MS;
+  const stale = [];
+
+  for (const [key, value] of Object.entries(everything)) {
+    const captured = key.startsWith("req:") && (!value || typeof value.at !== "number" || value.at < cutoff);
+
+    // Hand-back records are normally consumed on sight; this clears the ones whose
+    // download never came back — a browser closed mid-handover, say.
+    const handedBack =
+      key.startsWith("ret:") && (!value || typeof value.at !== "number" || value.at < Date.now() - HANDED_BACK_MS);
+
+    if (captured || handedBack) {
+      stale.push(key);
+    }
+  }
+
+  if (stale.length) {
+    await chrome.storage.session.remove(stale);
+    log("forgot", stale.length, "expired header captures");
+  }
+}
+
 // Tries the final URL and the original, because a download that was redirected reports one
 // of each and the request was watched under whichever came first.
-async function headersFor(...urls) {
+//
+// Returns the whole capture rather than only its headers: the method is what says whether
+// this download can be taken at all, and that decision is made before anything is
+// cancelled.
+async function capturedFor(...urls) {
   for (const url of urls) {
     if (!url) {
       continue;
@@ -225,16 +410,27 @@ async function headersFor(...urls) {
       const entry = stored[keyFor(url)];
 
       if (entry && Date.now() - entry.at < RECENT_MS) {
-        log("copied", Object.keys(entry.headers).length, "headers from the real request");
-        return entry.headers;
+        log(
+          "matched the real request:",
+          Object.keys(entry.headers).length + " headers,",
+          entry.method || "method unrecorded"
+        );
+
+        return entry;
       }
     } catch (error) {
       // Fall through to the next candidate.
     }
   }
 
-  log("no captured headers for this download; falling back to cookie and referer alone");
+  log("no captured request for this download; falling back to cookie and referer alone");
   return undefined;
+}
+
+/// The headers alone, for the right-click path, where there is no download to decide about.
+async function headersFor(...urls) {
+  const captured = await capturedFor(...urls);
+  return captured && captured.headers;
 }
 
 function log(...parts) {
@@ -245,6 +441,173 @@ function log(...parts) {
 // ---------------------------------------------------------------------------
 // Taking over the browser's own downloads
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The early hook
+// ---------------------------------------------------------------------------
+//
+// chrome.downloads.onCreated fires after Chrome has decided the response is a download
+// and begun settling its name — and settling the name is when Chrome shows "Where do you
+// want to save this?". Everything done from there is a reaction to a download that
+// already exists and a dialog the user has already been asked. Two prompts for one file.
+//
+// onDeterminingFilename fires during that settling, before the prompt. Returning true
+// promises Chrome that suggest() will be called later; when this takes the download it
+// simply never calls it, and cancels instead. The name is never settled, so the dialog
+// never appears.
+//
+// The price is real and worth stating plainly: the download has to be cancelled before
+// SDM has agreed to take it, because waiting for an answer — which can mean launching
+// SDM and waiting on a pipe — is far longer than the moment available here. So the
+// guarantee changes. It used to be "nothing is taken from Chrome until SDM accepts". It
+// is now "if SDM refuses, the download is handed straight back", by re-issuing it. A
+// re-issued download starts again rather than resuming, which is the cost of not being
+// asked twice for every file.
+function onDeterminingFilename(item, suggest) {
+  if (!canTakeOver(item)) {
+    suggest();
+    return false;
+  }
+
+  // Whether the download still belongs to Chrome.
+  //
+  // This matters because the two ways of giving one back are opposites, and picking the
+  // wrong one loses the file. Before it is cancelled, settling a name hands it back. After
+  // it is cancelled, settling a name would name a download that no longer exists, and the
+  // only way back is to create it again.
+  //
+  // The catch below used to do neither. Anything that threw before the cancel — storage
+  // unavailable, a permission revoked mid-session — left the name unsettled and the
+  // download uncancelled: stuck at "Starting…" for ever, fetched by nobody, and with no
+  // entry the user could resume. Under the old hook the same throw left it merely paused,
+  // which the user could resume by hand. Cancelling first raises the price of every
+  // mistake here, so no path may end without deciding.
+  const held = { taken: false };
+
+  intercept(item, suggest, held).catch((error) => {
+    log("intercept threw:", String(error));
+
+    if (held.taken) {
+      handBack(item.finalUrl || item.url, item).catch(() => {});
+      notify("SDM could not take the download", String(error) + " Chrome is downloading it instead.");
+    } else {
+      suggest();
+    }
+  });
+
+  return true;
+}
+
+async function intercept(item, suggest, held) {
+  const url = item.finalUrl || item.url;
+
+  if (!(await enabled()) || (await excluded(url))) {
+    log("left to Chrome (turned off, or an excluded site):", url);
+    suggest();
+    return;
+  }
+
+  // The loop guard. A download handed back to Chrome is created by us, so it arrives here
+  // again — and without this it would be taken, refused, handed back, and taken again,
+  // for as long as the browser is open.
+  if (await wasHandedBack(url)) {
+    log("this is the copy we just gave back; leaving it alone:", url);
+    suggest();
+    return;
+  }
+
+  const captured = await capturedFor(url, item.url);
+
+  // A file that answers a POST cannot be fetched again by asking for it.
+  //
+  // SDM would send a GET and get something else — a login page, a 405, an error document
+  // — and saving that under the wanted file's name is the failure this whole design
+  // exists to prevent. Worse, handing it back cannot rescue it either: downloads.download
+  // would issue a GET too. Chrome is the only thing here that can still complete it, so
+  // it is left alone before anything is cancelled.
+  if (captured && captured.method && captured.method !== "GET") {
+    log("left to Chrome: this answers a " + captured.method + ", which cannot be repeated:", url);
+    suggest();
+    return;
+  }
+
+  // Cancelled and erased before the handover. See above: this is the trade this hook asks
+  // for, and it is the whole reason the dialog does not appear.
+  await chrome.downloads.cancel(item.id).catch(() => {});
+  await chrome.downloads.erase({ id: item.id }).catch(() => {});
+  held.taken = true;
+
+  log("took it before Chrome could ask:", url);
+
+  const reply = await answerOrGiveUp(
+    handOver(url, item.referrer, captured && captured.headers, suggestedNameFrom(item))
+  );
+
+  if (!reply.ok) {
+    log("SDM refused; handing it back to Chrome:", reply.message);
+    await handBack(url, item);
+    notify("SDM did not take the download", reply.message + " Chrome is downloading it instead.");
+    return;
+  }
+
+  log("SDM took it:", url);
+}
+
+/// How long SDM has to answer before the download is given back to the browser.
+///
+/// The host allows itself two seconds to reach a running SDM and twenty to start one, so
+/// this is that with room to spare. It exists because the download has already been
+/// cancelled by the time we are waiting: a handover that never settles — a native host
+/// that hangs rather than exits — would otherwise leave the file fetched by nobody, with
+/// nothing on screen to say so. Set too short it would cost a duplicate; set to nothing
+/// at all it costs the file.
+const HANDOVER_TIMEOUT_MS = 45_000;
+
+function answerOrGiveUp(handover) {
+  return Promise.race([
+    handover,
+    new Promise((resolve) =>
+      setTimeout(
+        () => resolve({ ok: false, message: "SDM did not answer in time." }),
+        HANDOVER_TIMEOUT_MS
+      )
+    ),
+  ]);
+}
+
+/// Gives a refused download back to the browser, which starts it again from the beginning.
+async function handBack(url, item) {
+  // Recorded before the download is created, not after: the new download can reach
+  // onDeterminingFilename before this function's next line runs.
+  await rememberHandedBack(url);
+
+  // No saveAs. Forcing the dialog here would ask a user who turned that setting off a
+  // question they had already answered, on the one path that is meant to be Chrome
+  // behaving normally. Whoever wants the prompt has it switched on already.
+  const request = { url };
+  const name = suggestedNameFrom(item);
+
+  // download() wants a path relative to the downloads folder and rejects an absolute one,
+  // while the name Chrome proposes here is usually absolute.
+  if (name) {
+    request.filename = name;
+  }
+
+  try {
+    await chrome.downloads.download(request);
+  } catch (error) {
+    log("could not hand the download back:", String(error));
+    notify("The download was lost", "SDM refused it and Chrome would not take it back: " + String(error));
+  }
+}
+
+/// Chrome's own proposed name, which it took from Content-Disposition — better than a URL.
+function suggestedNameFrom(item) {
+  const proposed = item.filename || "";
+  const name = proposed.split(/[\\/]/).pop();
+
+  return name && name !== "." && name !== ".." ? name : undefined;
+}
 
 function onDownloadCreated(item) {
   takeOver(item).catch((error) => {
@@ -399,11 +762,14 @@ async function enabled() {
 // Talking to SDM
 // ---------------------------------------------------------------------------
 
-async function handOver(url, referrer, headers) {
+async function handOver(url, referrer, headers, suggestedName) {
   const message = {
     type: "download",
     url: url,
-    fileName: fileNameFrom(url),
+
+    // What Chrome proposed, which it read from Content-Disposition, in preference to
+    // the last segment of a URL that often ends in an opaque id.
+    fileName: suggestedName || fileNameFrom(url),
     referrer: referrer,
 
     // The real request, when there was one to watch. Everything below is the fallback for

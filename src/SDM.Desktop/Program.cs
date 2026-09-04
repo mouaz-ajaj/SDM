@@ -2,6 +2,7 @@ using Avalonia;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SDM.Application.ApplicationInfo;
+using SDM.Infrastructure.Integration;
 using SDM.Infrastructure.Logging;
 
 namespace SDM.Desktop;
@@ -11,6 +12,19 @@ internal static class Program
     [STAThread]
     public static async Task<int> Main(string[] args)
     {
+        // Claimed before the container is built, and so before anything opens the
+        // database, the log file or the pipe. A second copy that got as far as any of
+        // those has already done the damage this is here to prevent.
+        using SingleInstance instance = SingleInstance.Claim();
+
+        if (!instance.IsOnly)
+        {
+            // The copy already running owns everything; this one only asks it to come
+            // forward, so a second launch is not a window that never appears.
+            await SingleInstance.AskRunningInstanceToShowAsync();
+            return 0;
+        }
+
         ServiceProvider? services = null;
 
         try

@@ -12,7 +12,7 @@ namespace SDM.Desktop.Services;
 /// name, size, type and whether it can be resumed — which is what actually decides where
 /// someone wants to put it.
 /// </summary>
-public sealed class DialogSaveLocationPicker : ISaveLocationPicker
+public sealed class DialogSaveLocationPicker : ISaveLocationPicker, IAppDialogs
 {
     private readonly IServiceProvider _services;
     private readonly StorageProviderFolderPicker _folderPicker;
@@ -56,6 +56,25 @@ public sealed class DialogSaveLocationPicker : ISaveLocationPicker
         }
 
         return viewModel.Result;
+    }
+
+    /// <summary>
+    /// Asks before something that cannot be undone. False when there is no window to ask
+    /// from — an unanswerable question is not consent.
+    /// </summary>
+    public async Task<bool> ConfirmAsync(string title, string message, string confirmLabel)
+    {
+        if (_owner is null)
+        {
+            return false;
+        }
+
+        ConfirmViewModel viewModel = new(title, message, confirmLabel);
+        ConfirmWindow window = new(viewModel);
+
+        await window.ShowDialog(_owner);
+
+        return viewModel.Confirmed;
     }
 
     /// <summary>Opens the settings window over the main one.</summary>

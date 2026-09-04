@@ -19,10 +19,19 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
 
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>How long a connected client has to finish its request line.</summary>
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>A generous ceiling on one request: a page's whole header set and then some.</summary>
+    private const int MaximumRequestCharacters = 256 * 1024;
+
     private readonly IApplicationInfoService _applicationInfo;
     private readonly ILogger<NamedPipeBrowserBridge> _logger;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string _pipeName;
+
+    /// <summary>Connections being answered right now, so shutdown can let them finish.</summary>
+    private readonly List<Task> _inFlight = [];
 
     private Task? _acceptLoop;
 
@@ -52,6 +61,8 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
 
     public event EventHandler<BridgeMessage>? DownloadRequested;
 
+    public event EventHandler? ShowRequested;
+
     public bool IsRunning { get; private set; }
 
     public string Address => @"\\.\pipe\" + _pipeName;
@@ -74,17 +85,17 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            NamedPipeServerStream server;
+
             try
             {
                 // A fresh server instance per connection: one misbehaving client cannot
                 // hold the pipe and lock every later request out.
-                await using NamedPipeServerStream server = CreateServer();
+                server = CreateServer();
 
                 _waiting = server;
-                await server.WaitForConnectionAsync(cancellationToken);
+                await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 _waiting = null;
-
-                await ServeAsync(server, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -100,7 +111,47 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
             {
                 // One failed connection must not stop the bridge for the rest of the run.
                 _logger.LogWarning(exception, "A browser bridge connection failed.");
+                continue;
             }
+
+            // Served without being awaited, so the loop is already waiting for the next
+            // browser. Awaiting it here made the bridge strictly serial: one connection
+            // was served to completion before the next could even be accepted, so a
+            // client that connected and then said nothing — a native host killed mid-
+            // handover is enough — held the whole bridge until SDM was restarted. No
+            // download from any browser got through in the meantime.
+            //
+            // Tracked rather than abandoned, so that shutdown can give a request that is
+            // mid-answer the moment it needs. Without that a browser could be told
+            // nothing at all, having been told to wait.
+            Task serving = ServeAndDisposeAsync(server, cancellationToken);
+
+            lock (_inFlight)
+            {
+                _inFlight.Add(serving);
+                _inFlight.RemoveAll(task => task.IsCompleted);
+            }
+        }
+    }
+
+    private async Task ServeAndDisposeAsync(NamedPipeServerStream server, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ServeAsync(server, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is IOException or ObjectDisposedException or OperationCanceledException)
+        {
+            // A browser that hung up, or shutdown closing the pipe underneath the read.
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "A browser bridge connection failed.");
+        }
+        finally
+        {
+            await server.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -146,7 +197,15 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
         using StreamReader reader = new(server, leaveOpen: true);
         await using StreamWriter writer = new(server, leaveOpen: true) { AutoFlush = true };
 
-        string? line = await reader.ReadLineAsync(cancellationToken);
+        // A connected client that never finishes its line would otherwise hold this
+        // connection open for the life of the process. The request is one short line of
+        // JSON written immediately after connecting, so anything slower than this is not
+        // a browser waiting to be served.
+        using CancellationTokenSource deadline = new(RequestTimeout);
+        using CancellationTokenSource limited =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+
+        string? line = await ReadRequestAsync(reader, limited.Token).ConfigureAwait(false);
 
         if (string.IsNullOrWhiteSpace(line))
         {
@@ -154,7 +213,41 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
         }
 
         BridgeReply reply = Handle(line);
-        await writer.WriteLineAsync(JsonSerializer.Serialize(reply, Json).AsMemory(), cancellationToken);
+        await writer.WriteLineAsync(JsonSerializer.Serialize(reply, Json).AsMemory(), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// One line, with a ceiling on how long it may be. <see cref="StreamReader.ReadLineAsync"/>
+    /// grows its buffer until a newline arrives or memory runs out, and this pipe is
+    /// reachable by anything running as the user — including a native host with a bug in
+    /// it. A download request is a few hundred bytes; the allowance below is generous
+    /// enough for a page's whole header set and still bounded.
+    /// </summary>
+    private static async Task<string?> ReadRequestAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        char[] buffer = new char[4096];
+        System.Text.StringBuilder line = new();
+
+        while (line.Length <= MaximumRequestCharacters)
+        {
+            int read = await reader.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+
+            if (read == 0)
+            {
+                break;
+            }
+
+            int newline = Array.IndexOf(buffer, '\n', 0, read);
+
+            line.Append(buffer, 0, newline < 0 ? read : newline);
+
+            if (newline >= 0)
+            {
+                return line.ToString().TrimEnd('\r');
+            }
+        }
+
+        return line.Length > MaximumRequestCharacters ? null : line.ToString().TrimEnd('\r');
     }
 
     private BridgeReply Handle(string line)
@@ -184,6 +277,14 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
                 Version = _applicationInfo.Version,
                 Message = _applicationInfo.FullName,
             };
+        }
+
+        if (string.Equals(message.Type, BridgeProtocol.Show, StringComparison.Ordinal))
+        {
+            _logger.LogInformation("A second launch asked this copy to show itself.");
+            ShowRequested?.Invoke(this, EventArgs.Empty);
+
+            return new BridgeReply { Type = BridgeProtocol.Accepted };
         }
 
         if (!string.Equals(message.Type, BridgeProtocol.Download, StringComparison.Ordinal))
@@ -221,7 +322,7 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
 
         if (!_shutdown.IsCancellationRequested)
         {
-            await _shutdown.CancelAsync();
+            await _shutdown.CancelAsync().ConfigureAwait(false);
         }
 
         // Cancelling the token is not enough. A WaitForConnectionAsync that no browser is
@@ -245,7 +346,7 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
                 // Bounded, because nothing here is worth hanging an exit on. If the loop
                 // ever finds a new way to get stuck, the log says so and the process still
                 // closes.
-                await _acceptLoop.WaitAsync(ShutdownTimeout);
+                await _acceptLoop.WaitAsync(ShutdownTimeout).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -254,6 +355,30 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
             catch (TimeoutException)
             {
                 _logger.LogWarning("The browser bridge did not stop within {Timeout}.", ShutdownTimeout);
+            }
+        }
+
+        // Requests already being answered get the rest of that budget. They were told to
+        // wait for a reply, and disposing the bridge underneath one leaves the browser
+        // with a connection that closed saying nothing.
+        Task[] remaining;
+
+        lock (_inFlight)
+        {
+            remaining = [.. _inFlight.Where(task => !task.IsCompleted)];
+        }
+
+        if (remaining.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(remaining).WaitAsync(ShutdownTimeout).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is TimeoutException or IOException)
+            {
+                _logger.LogWarning(
+                    "{Count} browser bridge connection(s) were still being answered at shutdown.",
+                    remaining.Length);
             }
         }
 

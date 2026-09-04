@@ -27,6 +27,17 @@ public sealed record DownloadJob
 
     public FileCategory Category { get; init; } = FileCategory.Other;
 
+    /// <summary>
+    /// The destination came from a save dialog rather than from SDM's own sorting.
+    ///
+    /// A restored row has to know the difference. Resuming reads the partial file from
+    /// the folder the transfer was told to write into, so a transfer the user sent to
+    /// another drive has to be told that folder again — and one SDM sorted into a
+    /// category folder must not be, or the sorting and the "name (1)" that goes with it
+    /// would be skipped on the second attempt.
+    /// </summary>
+    public bool ChosenByUser { get; init; }
+
     public required DateTimeOffset CreatedAt { get; init; }
 
     public DateTimeOffset UpdatedAt { get; init; }

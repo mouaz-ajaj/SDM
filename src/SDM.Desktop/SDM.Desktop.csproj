@@ -45,10 +45,39 @@
                       Private="false" />
   </ItemGroup>
 
-  <Target Name="CopyNativeHost" AfterTargets="Build">
+  <!--
+    Where the host's own build put its output. Asked of the project rather than assembled
+    from $(Configuration) and $(TargetFramework) by hand: the hand-built path is a guess
+    that happens to be right for a default build and silently wrong for anything that
+    moves an output directory.
+  -->
+  <Target Name="ResolveNativeHostOutput">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\SDM.NativeHost\SDM.NativeHost.csproj"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework)">
+      <Output TaskParameter="TargetOutputs" ItemName="NativeHostAssembly" />
+    </MSBuild>
+
     <ItemGroup>
-      <NativeHostOutput Include="$(MSBuildThisFileDirectory)..\SDM.NativeHost\bin\$(Configuration)\$(TargetFramework)\SDM.NativeHost.*" />
+      <NativeHostOutput Include="%(NativeHostAssembly.RootDir)%(NativeHostAssembly.Directory)SDM.NativeHost.*" />
     </ItemGroup>
+  </Target>
+
+  <Target Name="CopyNativeHost" AfterTargets="Build" DependsOnTargets="ResolveNativeHostOutput">
     <Copy SourceFiles="@(NativeHostOutput)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    And again for publish, which is the only build anyone installs.
+
+    The target above runs after Build, and publish does run Build — but it copies into
+    $(OutDir), and publish then assembles its own folder from the items it knows about.
+    The host is not one of them, because it is referenced with ReferenceOutputAssembly
+    set to false. So every published SDM shipped without the executable Chrome launches:
+    the extension was registered against a path with nothing at it, and the only symptom
+    was the browser reporting "host not found".
+  -->
+  <Target Name="PublishNativeHost" AfterTargets="Publish" DependsOnTargets="ResolveNativeHostOutput">
+    <Copy SourceFiles="@(NativeHostOutput)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

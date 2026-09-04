@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Send a link to SDM instead of downloading it in the browser.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2mNtp9eQM9C40X/Y5qfII4g/paDWgj+sB8gs9tA/BIJkvzYf94A0qezyj0ji6BjvBpUwwgFKzWds+tPEx6eE1q1WdrtJXiRNnbVOrfFg3NhDTQj3MFd8StdjSpDDuN8b297N7w5+bj/EJEA55u6COm++8hXZemAuV+RJDO5TZEEFu/k7TuOJ45NbEtDqfP5wj46P4tfjv0tZ08TGqF5+1sULl/1R7wu0hVZ5G6UaYNWAS8rTvGCGUJpH4we7oiP/SKy5vbxaUpe1lszua4sYz632OgZtJnupvo9Pd5yEzlXWe7MsyrMlXo+uXA+JBpVc6p3DXdYGZ5Y0pXsR2dZoTQIDAQAB",
-  "minimum_chrome_version": "88",
+  "minimum_chrome_version": "102",
   "permissions": [
     "contextMenus",
     "nativeMessaging",

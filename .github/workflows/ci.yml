@@ -29,3 +29,8 @@ jobs:
 
       - name: Test
         run: dotnet test SDM.sln --configuration Release --no-build
+
+      # The extension is not built and no test project reads it, so every fault in it has
+      # reached a browser before anyone noticed. This loads it the way Chrome does.
+      - name: Check the browser extension
+        run: node tools/check-extension.mjs

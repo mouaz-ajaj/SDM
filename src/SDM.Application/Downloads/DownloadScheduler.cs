@@ -33,18 +33,18 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
         // The host slot is taken first on purpose. Taking the global slot first would let
         // three transfers queued behind one busy server occupy every global slot and stall
         // downloads from other hosts that could have run immediately.
-        await host.WaitAsync(cancellationToken);
+        await host.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await _globalSlots.WaitAsync(cancellationToken);
+            await _globalSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             try
             {
                 // Only now is the transfer really beginning; the caller has been showing it
                 // as queued until this point.
                 callbacks?.Started?.Invoke();
-                return await _startDownload.ExecuteAsync(address, callbacks, destination, context, cancellationToken);
+                return await _startDownload.ExecuteAsync(address, callbacks, destination, context, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -71,15 +71,15 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
         return _hostSlots.GetOrAdd(key, _ => new SemaphoreSlim(_maximumPerHost, _maximumPerHost));
     }
 
-    public void Dispose()
-    {
-        _globalSlots.Dispose();
-
-        foreach (SemaphoreSlim host in _hostSlots.Values)
-        {
-            host.Dispose();
-        }
-
-        _hostSlots.Clear();
-    }
+    /// <summary>
+    /// Deliberately leaves the semaphores alone.
+    ///
+    /// This is disposed with the container, while transfers may still be waiting on these
+    /// slots — a queued download turns its wait into an ObjectDisposedException the
+    /// moment they go, which surfaces as a row failing for a reason that has nothing to
+    /// do with the download. A SemaphoreSlim that is never waited on again holds no
+    /// unmanaged resource worth reclaiming from a process that is exiting anyway; the
+    /// dictionary is cleared so nothing new can find one.
+    /// </summary>
+    public void Dispose() => _hostSlots.Clear();
 }

@@ -45,18 +45,49 @@ On by default: someone installing a download manager's extension is asking for i
 download manager. The options page turns it off, and the change applies to the next click
 rather than the next restart.
 
-**A download is paused, not cancelled, until SDM has accepted it.** If the host is
-unregistered, the path is stale, or SDM refuses, the browser's own download is resumed and
-Chrome finishes it, with a notification saying why. Cancelling first would mean one broken
-component silently breaks every download in the browser.
+**The download is caught before Chrome asks where to save it.**
+
+Chrome settles a download name and, if you have "Ask where to save each file" turned on,
+prompts you while doing it. `chrome.downloads.onCreated` fires after that has begun, so
+an extension hooked there can only react to a download the browser has already asked you
+about — two prompts for one file, which is what this used to do.
+
+`onDeterminingFilename` fires during that settling, before the prompt. Taking a download
+there means never letting the name settle, so Chrome never asks.
+
+**The trade is real.** The download has to be cancelled before SDM has agreed to take it,
+because waiting for an answer — which can mean launching SDM and waiting on a pipe — is
+far longer than the moment available. So the guarantee is no longer "nothing is taken from
+Chrome until SDM accepts". It is **"if SDM refuses, the download is handed straight
+back"**, by re-issuing it, with a notification saying why. A re-issued download starts
+again rather than resuming: that is the price of not being asked twice for every file.
+
+A download handed back is recorded, so that when it arrives a second time it is left
+alone. Without that it would be taken, refused, handed back and taken again for as long
+as the browser is open.
+
+Because cancelling first raises the price of every mistake, three things are refused
+before anything is cancelled rather than after:
+
+- **A file that answers a POST.** Asking for it again gets something else — a login page,
+  a 405, an error document — and handing it back cannot rescue it either, because that
+  issues a GET too. Chrome is the only thing that can still finish it.
+- **Anything that throws on the way.** Storage unavailable, a permission revoked
+  mid-session: the download is given back by settling its name, which is the one moment
+  that still works.
+- **A handover that never answers.** The host is given forty-five seconds — twice what it
+  allows itself to start SDM — and then the download goes back to Chrome. Without that
+  ceiling a native host that hangs rather than exits would leave the file fetched by
+  nobody, and nothing on screen to say so.
 
 Only `http` and `https` are taken over. A `blob:` or `data:` URL exists nowhere but inside
 the page that created it, and handing one to SDM would cancel a download that nothing else
 can then perform.
 
-A download that finishes before the handover completes is also left alone. Reaching SDM
-means launching a process and waiting on a pipe, and a small file can be finished by then —
-at which point taking it over would fetch a second copy of a file the browser already has.
+The race that used to lose small files is gone with the old hook. Catching a download at
+`onCreated` meant the browser was already fetching it, and a small file could finish
+inside the handover — so it arrived twice. At `onDeterminingFilename` not a byte has been
+written yet, because Chrome has not settled where to put them.
 
 ## The real request is copied, not guessed
 
@@ -103,6 +134,18 @@ No content scripts and no `tabs`: the extension never reads the contents of a pa
 sees the URL being downloaded, the address of the tab it came from, and that site's
 cookies.
 
+## Checking it without a browser
+
+```powershell
+node tools\check-extension.mjs
+```
+
+Loads `background.js` against a stub of the browser API — which is what registering a
+service worker does — and drives one download through it. It catches the faults that
+reach a browser and nothing else: an unrecognised manifest key, a listener that never
+registered, a variable read before its declaration, and a request type left out of the
+header capture. CI runs it on every push.
+
 ## When it does not work
 
 The browser reports almost every failure as "host not found". In order of likelihood:
@@ -112,7 +155,16 @@ The browser reports almost every failure as "host not found". In order of likeli
    `SDM.NativeHost.exe`. Rebuilding elsewhere, or moving the repository, invalidates it —
    run the script again.
 3. **The ids disagree.** Compare the id Chrome shows on `chrome://extensions` with
-   `allowed_origins` in `com.sdm.host.json` beside the executable.
+   `allowed_origins` in `%LOCALAPPDATA%\SDM\com.sdm.host.json`.
+
+The manifest lives beside the user's data rather than beside the executable, because the
+executable's folder is a build output: `dotnet clean`, `git clean -xdf`, or deleting
+`bin\` to force a rebuild used to take the manifest with it. The registry key survived,
+still pointing at a file that no longer existed, and the browser reported "host not
+found" while the registration looked perfectly correct.
+
+`& '...\SDM.NativeHost.exe' --selftest` answers the first two of these directly: it
+checks the framing and says whether SDM is running, without starting it.
 
 `chrome://extensions` → **service worker** opens the extension's console, where a failed
 send is logged. `%LOCALAPPDATA%\SDM\logs` holds the application's side of the same

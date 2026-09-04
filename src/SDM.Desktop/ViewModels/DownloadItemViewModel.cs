@@ -25,9 +25,19 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private const double SmoothingFactor = 0.3;
     private const double MinimumSampleSeconds = 0.15;
 
+    /// <summary>
+    /// How long a cancelled transfer is given to unwind before the window stops waiting.
+    /// Long enough for a connection to notice, short enough not to hang an exit.
+    /// </summary>
+    private static readonly TimeSpan UnwindTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>Lines kept in the History tab. Not persisted; this is one session's story.</summary>
+    private const int MaximumHistoryEntries = 200;
+
     private readonly IDownloadScheduler _scheduler;
     private readonly IDownloadRepository _repository;
     private readonly ISystemShell _shell;
+    private readonly IUiThread _ui;
     private readonly ILogger _logger;
     private readonly Guid _id;
     private readonly string _address;
@@ -42,6 +52,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private readonly DateTimeOffset _createdAt;
 
     private CancellationTokenSource _cancellation = new();
+
+    /// <summary>The transfer in flight, so stopping the row can wait for it by name.</summary>
+    private Task _running = Task.CompletedTask;
+
     private long _bytesReceived;
     private long? _totalBytes;
     private string? _mediaType;
@@ -54,6 +68,9 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     public double BytesPerSecond => _bytesPerSecond;
     private bool _pauseRequested;
     private bool _disposed;
+
+    /// <summary>The last stamp handed to the repository. Never allowed to go backwards.</summary>
+    private DateTimeOffset _lastRevision;
 
     [ObservableProperty]
     private string _fileName;
@@ -100,10 +117,26 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private bool _serverSupportsResume = true;
 
-    /// <summary>Shown when the transfer is split, so the speed figure is explicable.</summary>
+    /// <summary>
+    /// How many connections the transfer was split across; zero until the server answers.
+    ///
+    /// This used to be a string that nothing ever assigned, which cost two things at once:
+    /// the status column could only ever say "Downloading", and the Connections field in
+    /// the detail panel — bound to it, and labelled — was blank for every transfer SDM has
+    /// ever run. One number, two readings of it, is what it should have been.
+    /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusText))]
-    private string _connectionsText = string.Empty;
+    [NotifyPropertyChangedFor(nameof(ConnectionsText))]
+    private int _connectionCount;
+
+    /// <summary>The detail panel's reading: always says something, even for one connection.</summary>
+    public string ConnectionsText => ConnectionCount switch
+    {
+        0 => "Not known yet",
+        1 => "1 — this file is not split",
+        _ => $"{ConnectionCount} running at once",
+    };
 
     /// <summary>
     /// Every byte has arrived and the file is being checked and moved into place. Still
@@ -150,6 +183,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         IDownloadScheduler scheduler,
         IDownloadRepository repository,
         ISystemShell shell,
+        IUiThread ui,
         ILogger logger,
         Guid id,
         string address,
@@ -162,6 +196,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         _scheduler = scheduler;
         _repository = repository;
         _shell = shell;
+        _ui = ui;
         _logger = logger;
         _id = id;
         _address = address;
@@ -173,20 +208,32 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         IDownloadScheduler scheduler,
         IDownloadRepository repository,
         ISystemShell shell,
+        IUiThread ui,
         ILogger logger,
         string address,
         DownloadDestination? destination = null,
-        RequestContext? context = null)
+        RequestContext? context = null,
+        string? suggestedFileName = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(ui);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
 
         DownloadItemViewModel item = new(
-            scheduler, repository, shell, logger,
+            scheduler, repository, shell, ui, logger,
             Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow, destination, context);
+
+        // Only what the row shows until the server answers. It is not passed to the
+        // engine, which settles the real name from Content-Disposition — but a name the
+        // browser already knew beats one guessed from a URL that ends in an opaque id,
+        // and it is what the user was looking at when they clicked.
+        if (!string.IsNullOrWhiteSpace(suggestedFileName))
+        {
+            item.FileName = SafeFileName.Sanitize(suggestedFileName);
+        }
 
         item.Persist();
         return item;
@@ -197,14 +244,17 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         IDownloadScheduler scheduler,
         IDownloadRepository repository,
         ISystemShell shell,
+        IUiThread ui,
         ILogger logger,
         DownloadJob job)
     {
         ArgumentNullException.ThrowIfNull(job);
         ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(ui);
 
         DownloadItemViewModel item = new(
-            scheduler, repository, shell, logger, job.Id, job.Address, job.CreatedAt)
+            scheduler, repository, shell, ui, logger, job.Id, job.Address, job.CreatedAt,
+            DestinationFor(job))
         {
             DestinationPath = job.DestinationPath,
             _bytesReceived = job.BytesReceived,
@@ -242,6 +292,24 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
         return item;
     }
+
+    /// <summary>
+    /// Gives a restored row back the destination the user picked for it, and only then.
+    ///
+    /// Resuming looks for the partial file inside the folder the transfer is told to
+    /// write into. A row restored without its folder was told the default one, found
+    /// nothing there, and started the whole download again — into the default folder,
+    /// not the drive the user had chosen. Both halves of that were wrong.
+    ///
+    /// A row SDM sorted itself is deliberately left alone: handing back the category
+    /// folder as though the user had chosen it would turn off the sorting and the
+    /// "name (1)" that keeps a second copy from overwriting the first.
+    /// </summary>
+    private static DownloadDestination? DestinationFor(DownloadJob job) =>
+        job is { ChosenByUser: true, DestinationPath: { Length: > 0 } path }
+        && Path.GetDirectoryName(path) is { Length: > 0 } directory
+            ? new DownloadDestination(directory, Path.GetFileName(path))
+            : null;
 
     public string Address => _address;
 
@@ -282,7 +350,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         DownloadStatus.Pending when RetryText.Length > 0 => RetryText,
         DownloadStatus.Pending => "Queued",
         DownloadStatus.Running when IsVerifying => "Verifying",
-        DownloadStatus.Running => string.IsNullOrEmpty(ConnectionsText) ? "Downloading" : ConnectionsText,
+
+        // The connection count is worth the column's width only when it explains
+        // something: a speed made of four connections at once is otherwise puzzling.
+        DownloadStatus.Running => ConnectionCount > 1 ? $"{ConnectionCount} connections" : "Downloading",
         DownloadStatus.Paused => "Paused",
         DownloadStatus.Completed => "Complete",
         DownloadStatus.Failed => "Failed",
@@ -290,25 +361,46 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         _ => Status.ToString(),
     };
 
-    /// <summary>Runs the transfer to completion. Never throws: failures become status.</summary>
-    public async Task RunAsync()
+    /// <summary>
+    /// Runs the transfer to completion. Never throws: failures become status. Called on
+    /// the interface thread, which is where everything it writes has to be written.
+    /// </summary>
+    /// <remarks>
+    /// The task is kept so that stopping the row can wait for the real thing rather than
+    /// for a guess about how long unwinding takes.
+    /// </remarks>
+    public Task RunAsync() => _running = RunCoreAsync();
+
+    private async Task RunCoreAsync()
     {
         _pauseRequested = false;
 
+        // Progress<T> posts to the interface thread by itself. The four below are plain
+        // delegates the engine invokes wherever it happens to be standing, so each is
+        // marshalled by hand: every one writes observable properties, and two of them add
+        // to collections the window is bound to — which a thread pool thread may not do.
         DownloadCallbacks callbacks = new()
         {
             Progress = new Progress<DownloadProgress>(OnProgress),
             Segments = new Progress<IReadOnlyList<SegmentProgress>>(OnSegments),
-            Planned = OnPlanned,
-            Retrying = OnRetry,
-            Started = OnStarted,
-            Verifying = OnVerifying,
+            Planned = plan => _ui.Invoke(() => OnPlanned(plan)),
+            Retrying = retry => _ui.Invoke(() => OnRetry(retry)),
+            Started = () => _ui.Invoke(OnStarted),
+            Verifying = () => _ui.Invoke(OnVerifying),
         };
 
         try
         {
-            DownloadResult result = await _scheduler.EnqueueAsync(
-                _address, callbacks, _destination, _context, _cancellation.Token);
+            // Task.Run, so the transfer begins on a thread pool thread with no
+            // synchronization context to capture. Awaited directly, the whole engine ran
+            // on the interface thread instead — every await inside it resumed there, so
+            // each 80 KB read, each write, the folder scan that looks for a partial file
+            // and the final move of a finished file were all pumped through the very
+            // dispatcher the window draws on.
+            DownloadResult result = await Task.Run(
+                () => _scheduler.EnqueueAsync(
+                    _address, callbacks, _destination, _context, _cancellation.Token),
+                CancellationToken.None);
 
             DestinationPath = result.DestinationPath;
             FileName = Path.GetFileName(result.DestinationPath);
@@ -363,6 +455,21 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         {
             Settle(DownloadStatus.Failed, "Access to the download folder was denied");
         }
+        catch (Exception exception)
+        {
+            // The clauses above name the failures that were expected, and the list was
+            // not complete: HttpRequestException raised while a split transfer opens its
+            // parts reaches here, and so does anything a future change adds. Because this
+            // method is started and not awaited, every one of those became an unobserved
+            // task exception — the row sat on "Downloading" for ever, with no message, no
+            // failure, and a resume button that could not be pressed because the row was
+            // still, as far as it knew, running.
+            //
+            // A row that cannot say what went wrong is worse than one that says something
+            // vague, so nothing gets out of here uncaught.
+            _logger.LogError(exception, "Transfer {JobId} failed unexpectedly.", _id);
+            Settle(DownloadStatus.Failed, $"Transfer failed: {exception.Message}");
+        }
     }
 
     /// <summary>Cancels and waits for the transfer to unwind. Used while the window closes.</summary>
@@ -374,11 +481,42 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         }
 
         _pauseRequested = keepPartialFile;
-        _cancellation.Cancel();
+        await _cancellation.CancelAsync();
 
-        for (int attempt = 0; attempt < 100 && IsActive; attempt++)
+        // The transfer's own task, waited for directly. This used to poll IsActive every
+        // 20 ms and give up after two seconds — a guess at how long unwinding takes, which
+        // is wrong in both directions: it waits when the transfer stopped at once, and it
+        // walks away while the transfer is still writing when a connection is slow to
+        // notice the cancellation. Walking away is what mattered: the row's final state
+        // was then written while it was still changing.
+        //
+        // The wait is still bounded, because the window is closing and nothing here is
+        // worth hanging an exit on. RunAsync turns every failure into status and never
+        // throws, so there is nothing to catch from the task itself.
+        try
         {
-            await Task.Delay(20);
+            await _running.WaitAsync(UnwindTimeout);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning(
+                "Transfer {JobId} did not stop within {Timeout}; its state is being written anyway.",
+                _id,
+                UnwindTimeout);
+        }
+        catch (Exception exception)
+        {
+            // WaitAsync rethrows whatever the transfer's task ended with, and RunAsync's
+            // own catch-all is not quite total: an exception raised from inside one of its
+            // catch clauses — discarding a partial file on a drive that has gone, adding
+            // to a bound collection off the interface thread — still faults the task.
+            //
+            // Rethrowing it here is what would hurt. This is called from the window's
+            // closing handler, where Task.WhenAll over every row would fail and Close()
+            // would never be reached, leaving a window that cannot be shut; and from row
+            // removal, where it would be an unobserved exception and the row would simply
+            // stay in the list. The row has already settled either way.
+            _logger.LogWarning(exception, "Transfer {JobId} ended badly while being stopped.", _id);
         }
 
         // Persist() runs detached everywhere else so it never blocks a transfer, but the
@@ -555,6 +693,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         MediaTypeText = string.IsNullOrWhiteSpace(plan.MediaType) ? "Not reported" : plan.MediaType;
         SizeText = plan.TotalBytes is { } size ? FormatBytes(size) : "Unknown";
         ResumeText = plan.ServerSupportsResume ? "Yes — server accepts ranges" : "No — cannot be resumed";
+        ConnectionCount = plan.SegmentCount;
 
         Record(
             DownloadEventKind.Information,
@@ -602,8 +741,23 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         }
     }
 
-    private void Record(DownloadEventKind kind, string text) =>
+    /// <summary>
+    /// Adds a line to the History tab, oldest dropped once there are too many.
+    ///
+    /// A row that is paused and resumed all afternoon writes two lines per attempt and
+    /// nothing ever removed one. The cap is generous — far more than anybody scrolls —
+    /// and exists so that a list which is only ever appended to cannot grow for as long
+    /// as the application is open.
+    /// </summary>
+    private void Record(DownloadEventKind kind, string text)
+    {
         History.Add(new DownloadEventViewModel(new DownloadEvent(DateTimeOffset.Now, kind, text)));
+
+        while (History.Count > MaximumHistoryEntries)
+        {
+            History.RemoveAt(0);
+        }
+    }
 
     private void OnRetry(DownloadRetry retry)
     {
@@ -736,6 +890,26 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         _ = SaveAsync(Snapshot());
     }
 
+    /// <summary>
+    /// The stamp the repository uses to tell a newer snapshot of this row from an older
+    /// one, guaranteed never to go backwards.
+    ///
+    /// It is a wall-clock time because that is what the column holds and what a person
+    /// reading the database expects — but a wall clock can be moved. A machine that wakes
+    /// from sleep and corrects itself against a time server, or one whose clock is simply
+    /// wrong and gets fixed, steps backwards; every snapshot taken after that would look
+    /// older than the row already stored, and the guard that keeps a stale write from
+    /// overwriting a fresh one would quietly discard every save until the clock caught
+    /// up. Advancing by a tick when the clock does not is enough: the comparison is only
+    /// ever between two snapshots of the same row.
+    /// </summary>
+    private DateTimeOffset NextRevision()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        _lastRevision = now > _lastRevision ? now : _lastRevision.AddTicks(1);
+        return _lastRevision;
+    }
+
     private DownloadJob Snapshot()
     {
         return new DownloadJob
@@ -749,8 +923,9 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             Detail = Detail,
             MediaType = _mediaType,
             Category = _category,
+            ChosenByUser = _destination is not null,
             CreatedAt = _createdAt,
-            UpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = NextRevision(),
         };
     }
 

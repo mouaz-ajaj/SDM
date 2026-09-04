@@ -1,0 +1,34 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:SDM.Desktop.ViewModels"
+        x:Class="SDM.Desktop.Views.ConfirmWindow"
+        x:DataType="vm:ConfirmViewModel"
+        Title="{Binding Title}"
+        Icon="/Assets/Branding/sdm-mark.png"
+        Width="460"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI"
+        Background="{StaticResource WindowBackgroundBrush}">
+
+  <StackPanel Margin="26,22,26,20" Spacing="14">
+    <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold"
+               Foreground="{StaticResource TextPrimaryBrush}" />
+
+    <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="12.5"
+               Foreground="{StaticResource TextSecondaryBrush}" />
+
+    <!--
+      Cancel is the default and the destructive button is not, so a return key pressed
+      out of habit dismisses the question rather than answering it.
+    -->
+    <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,0">
+      <Button Grid.Column="1" Classes="secondary" Content="Cancel"
+              Command="{Binding CancelCommand}" IsCancel="True" IsDefault="True" />
+      <Button Grid.Column="2" Classes="danger" Margin="10,0,0,0"
+              Content="{Binding ConfirmLabel}" Command="{Binding ConfirmCommand}" />
+    </Grid>
+  </StackPanel>
+</Window>

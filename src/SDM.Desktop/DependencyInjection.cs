@@ -11,6 +11,8 @@ public static class DependencyInjection
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddSingleton<IUiThread, AvaloniaUiThread>();
+
         services.AddSingleton<StorageProviderFolderPicker>();
         services.AddSingleton<IFolderPicker>(
             provider => provider.GetRequiredService<StorageProviderFolderPicker>());
@@ -21,6 +23,8 @@ public static class DependencyInjection
 
         services.AddSingleton<DialogSaveLocationPicker>();
         services.AddSingleton<ISaveLocationPicker>(
+            provider => provider.GetRequiredService<DialogSaveLocationPicker>());
+        services.AddSingleton<IAppDialogs>(
             provider => provider.GetRequiredService<DialogSaveLocationPicker>());
 
         services.AddTransient<MainWindowViewModel>();

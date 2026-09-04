@@ -19,6 +19,12 @@ public static class BridgeProtocol
     public const string Download = "download";
     public const string Ping = "ping";
 
+    /// <summary>
+    /// Bring the running window forward. Sent by a second launch of SDM, which then
+    /// exits: one copy per user owns the pipe, the database and the partial files.
+    /// </summary>
+    public const string Show = "show";
+
     public const string Accepted = "accepted";
     public const string Pong = "pong";
     public const string Error = "error";

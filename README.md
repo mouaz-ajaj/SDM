@@ -73,7 +73,7 @@ src/
   SDM.Database/        SQLite persistence and its migrations
   SDM.Desktop/         Avalonia UI and the composition root
   SDM.NativeHost/      Chrome native messaging host
-tests/                 Core, Application, Infrastructure, NativeHost, Integration
+tests/                 Core, Application, Infrastructure, Desktop, NativeHost, Integration
 tools/                 Native host registration and acceptance scripts
 docs/                  Product scope, architecture, roadmap, and ADRs
 ```
@@ -95,7 +95,7 @@ dotnet build SDM.sln --configuration Release --no-restore
 dotnet test  SDM.sln --configuration Release --no-build
 ```
 
-Warnings are errors here, and the suite is 181 tests. Tests that need a server run against
+Warnings are errors here, and the suite is 208 tests. Tests that need a server run against
 a local `HttpListener`, never the public internet.
 
 ## Run

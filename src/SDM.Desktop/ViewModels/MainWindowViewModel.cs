@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -34,8 +33,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IDownloadRepository _repository;
     private readonly IDownloadFolder _downloadFolder;
     private readonly ISaveLocationPicker _picker;
-    private readonly DialogSaveLocationPicker _dialogs;
+    private readonly IAppDialogs _dialogs;
     private readonly ISystemShell _shell;
+    private readonly IUiThread _ui;
     private readonly IOptionsMonitor<DownloadOptions> _options;
     private readonly IBrowserBridge _bridge;
     private readonly ILogger<MainWindowViewModel> _logger;
@@ -71,8 +71,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IDownloadRepository repository,
         IDownloadFolder downloadFolder,
         ISaveLocationPicker picker,
-        DialogSaveLocationPicker dialogs,
+        IAppDialogs dialogs,
         ISystemShell shell,
+        IUiThread ui,
         IOptionsMonitor<DownloadOptions> options,
         IBrowserBridge bridge,
         ILogger<MainWindowViewModel> logger)
@@ -84,6 +85,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(picker);
         ArgumentNullException.ThrowIfNull(dialogs);
         ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(ui);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(bridge);
         ArgumentNullException.ThrowIfNull(logger);
@@ -95,6 +97,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _picker = picker;
         _dialogs = dialogs;
         _shell = shell;
+        _ui = ui;
         _options = options;
         _bridge = bridge;
         _logger = logger;
@@ -141,7 +144,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             foreach (DownloadJob job in await _repository.GetAllAsync())
             {
-                Track(DownloadItemViewModel.Restore(_scheduler, _repository, _shell, _logger, job));
+                Track(DownloadItemViewModel.Restore(_scheduler, _repository, _shell, _ui, _logger, job));
             }
 
             _logger.LogInformation("Restored {Count} transfers from the previous session.", All.Count);
@@ -158,8 +161,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // Started only once the list is restored, so a link arriving in the first second
         // is not lost or duplicated against a half-built list.
         _bridge.DownloadRequested += OnBrowserRequest;
-        await _bridge.StartAsync();
+        _bridge.ShowRequested += OnShowRequest;
+
+        try
+        {
+            await _bridge.StartAsync();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The window is already open and the list is already restored. A bridge that
+            // will not start costs the browser handover and nothing else, so it is
+            // reported where the user can see it rather than taken as a startup failure.
+            _logger.LogError(exception, "The browser bridge could not start.");
+            ErrorMessage = "The browser bridge could not start. Links from the browser will not arrive.";
+        }
     }
+
+    /// <summary>
+    /// A second launch of SDM asking this copy to come forward. Raised on the bridge's
+    /// own thread, so the window is touched from the interface thread.
+    /// </summary>
+    private void OnShowRequest(object? sender, EventArgs e) =>
+        _ui.Invoke(() => ShowRequested?.Invoke(this, EventArgs.Empty));
+
+    /// <summary>
+    /// Asks the window to bring itself forward. The view model does not own the window
+    /// and cannot raise it; the window listens for this and does.
+    /// </summary>
+    public event EventHandler? ShowRequested;
 
     /// <summary>
     /// A link handed over by the browser. The bridge raises this on its own thread, so
@@ -172,16 +201,44 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        _ui.Invoke(() =>
         {
+            if (AlreadyInFlight(url) is { } existing)
+            {
+                _logger.LogInformation("The browser sent {Url}, which this list is already downloading.", url);
+                Selected = existing;
+                ErrorMessage = $"{existing.FileName} is already in the list.";
+                return;
+            }
+
             DownloadItemViewModel item = DownloadItemViewModel.Create(
-                _scheduler, _repository, _shell, _logger, url, context: message.ToRequestContext());
+                _scheduler, _repository, _shell, _ui, _logger, url,
+                context: message.ToRequestContext(),
+                suggestedFileName: message.FileName);
 
             Track(item, atTop: true);
             Selected = item;
             _ = item.RunAsync();
         });
     }
+
+    /// <summary>
+    /// The row already working on this address, if there is one.
+    ///
+    /// Two rows for one address is not a duplicate in the list: it is two transfers
+    /// writing into the same partial file at once, because the file a transfer resumes
+    /// from is found by its URL. They interleave their bytes and the result is a corrupt
+    /// file that both rows report as finished. A double-click on a download button is
+    /// enough to cause it.
+    ///
+    /// Finished and cancelled rows are not in the way — they own nothing on disk that a
+    /// new transfer would collide with. A failed one does: its partial file is still
+    /// there waiting for the resume button, so it counts.
+    /// </summary>
+    private DownloadItemViewModel? AlreadyInFlight(string address) =>
+        All.FirstOrDefault(item =>
+            !item.IsFinished
+            && string.Equals(item.Address, address.Trim(), StringComparison.OrdinalIgnoreCase));
 
     public string BridgeAddress => _bridge.Address;
 
@@ -202,6 +259,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         ErrorMessage = null;
+
+        if (AlreadyInFlight(address) is { } running)
+        {
+            Selected = running;
+            ErrorMessage = $"{running.FileName} is already in the list.";
+            return;
+        }
+
         DownloadDestination? destination = null;
 
         if (_options.CurrentValue.AskWhereToSave)
@@ -219,7 +284,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Address = string.Empty;
 
         DownloadItemViewModel item = DownloadItemViewModel.Create(
-            _scheduler, _repository, _shell, _logger, address, destination);
+            _scheduler, _repository, _shell, _ui, _logger, address, destination);
 
         Track(item, atTop: true);
         Selected = item;
@@ -302,6 +367,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         ErrorMessage = null;
 
+        // Asked before anything is stopped, because the answer decides whether to stop it
+        // at all. One menu entry away from "Remove from list" sits a button that deletes a
+        // finished download from disk, and a menu is opened by the same click that picks
+        // an entry in it — nothing about that gesture should be able to destroy a file the
+        // user spent an hour fetching.
+        if (removal == TransferRemoval.DeleteFile && !await ConfirmDeletionAsync(item))
+        {
+            return;
+        }
+
         await item.StopAndWaitAsync(keepPartialFile: removal == TransferRemoval.KeepFile);
 
         if (removal == TransferRemoval.DeleteFile)
@@ -315,6 +390,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Refresh();
     }
+
+    /// <summary>
+    /// Names the file and says plainly what will happen to it. A finished transfer owns a
+    /// real file; an unfinished one owns only the partial file it would have resumed from,
+    /// and losing that means starting the download again — different losses, so they are
+    /// described differently rather than behind one word.
+    /// </summary>
+    private Task<bool> ConfirmDeletionAsync(DownloadItemViewModel item) =>
+        item.IsCompleted
+            ? _dialogs.ConfirmAsync(
+                "Delete this file?",
+                $"{item.FileName} will be removed from the list and deleted from disk. This cannot be undone.",
+                "Delete file")
+            : _dialogs.ConfirmAsync(
+                "Discard this download?",
+                $"{item.FileName} is not finished. Removing it deletes what has been downloaded so far, "
+                + "so it would have to start again from the beginning.",
+                "Discard download");
 
     /// <summary>
     /// Clears the rows the user is done with. This used to take everything that was not
@@ -358,6 +451,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         _bridge.DownloadRequested -= OnBrowserRequest;
+        _bridge.ShowRequested -= OnShowRequest;
         await _bridge.DisposeAsync();
     }
 
@@ -397,6 +491,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (e.PropertyName is nameof(DownloadItemViewModel.Status)
             or nameof(DownloadItemViewModel.CategoryName))
         {
+            // Raised here as well as on a collection change: this property is derived
+            // from the rows' own statuses, so a download finishing changes it without the
+            // list itself changing at all, and anything bound to it went stale.
+            OnPropertyChanged(nameof(HasActiveDownloads));
             Refresh();
         }
         else if (e.PropertyName is nameof(DownloadItemViewModel.SpeedText))
@@ -412,17 +510,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Refresh();
     }
 
-    /// <summary>Rebuilds the visible rows and every count in the sidebar.</summary>
+    /// <summary>Brings the visible rows and every count in the sidebar up to date.</summary>
     private void Refresh()
     {
         DownloadItemViewModel? keep = Selected;
 
-        Visible.Clear();
-
-        foreach (DownloadItemViewModel item in All.Where(Matches))
-        {
-            Visible.Add(item);
-        }
+        SyncVisible();
 
         foreach (FilterOptionViewModel option in Filters)
         {
@@ -435,11 +528,59 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 item => string.Equals(item.CategoryName, category.Name, StringComparison.Ordinal));
         }
 
-        // Clearing the collection drops the selection, so it is put back rather than
-        // making the detail panel blink every time a row changes status.
-        Selected = keep is not null && Visible.Contains(keep) ? keep : Visible.FirstOrDefault();
+        // Only when the row that was selected is genuinely no longer on screen.
+        if (keep is null || !Visible.Contains(keep))
+        {
+            Selected = Visible.FirstOrDefault();
+        }
 
         UpdateTotals();
+    }
+
+    /// <summary>
+    /// Moves <see cref="Visible"/> to what it should hold, changing only what differs.
+    ///
+    /// This used to clear the collection and refill it, and it runs whenever any row
+    /// changes status — several times a second across a busy list. Every rebuild reset
+    /// the table's scroll position, dropped and restored the selection under the user,
+    /// and made the detail panel blink. Almost every one of those rebuilds produced the
+    /// list that was already there.
+    /// </summary>
+    private void SyncVisible()
+    {
+        List<DownloadItemViewModel> wanted = [.. All.Where(Matches)];
+
+        if (Visible.SequenceEqual(wanted))
+        {
+            return;
+        }
+
+        for (int index = Visible.Count - 1; index >= 0; index--)
+        {
+            if (!wanted.Contains(Visible[index]))
+            {
+                Visible.RemoveAt(index);
+            }
+        }
+
+        for (int index = 0; index < wanted.Count; index++)
+        {
+            if (index < Visible.Count && ReferenceEquals(Visible[index], wanted[index]))
+            {
+                continue;
+            }
+
+            int existing = Visible.IndexOf(wanted[index]);
+
+            if (existing >= 0)
+            {
+                Visible.Move(existing, index);
+            }
+            else
+            {
+                Visible.Insert(index, wanted[index]);
+            }
+        }
     }
 
     private bool Matches(DownloadItemViewModel item)
@@ -452,17 +593,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return TransferFilters.Matches(SelectedFilter?.Filter ?? TransferFilter.All, item);
     }
 
+    /// <summary>
+    /// One pass, not four. This is called on every speed report — ten times a second for
+    /// each running transfer — and walked the whole list once per figure it produced.
+    /// </summary>
     private void UpdateTotals()
     {
-        int running = All.Count(item => item.Status is DownloadStatus.Running);
-        int queued = All.Count(item => item.Status is DownloadStatus.Pending);
-        int paused = All.Count(item => item.Status is DownloadStatus.Paused);
+        int running = 0;
+        int queued = 0;
+        int paused = 0;
+        double bytesPerSecond = 0;
+
+        foreach (DownloadItemViewModel item in All)
+        {
+            switch (item.Status)
+            {
+                case DownloadStatus.Running: running++; break;
+                case DownloadStatus.Pending: queued++; break;
+                case DownloadStatus.Paused: paused++; break;
+                default: break;
+            }
+
+            bytesPerSecond += item.BytesPerSecond;
+        }
 
         TotalsText = All.Count == 0
             ? "Nothing downloading"
             : $"{running} active · {queued} queued · {paused} paused";
 
-        double bytesPerSecond = All.Sum(item => item.BytesPerSecond);
         TotalSpeedText = bytesPerSecond > 0 ? FormatBytes((long)bytesPerSecond) + "/s" : string.Empty;
     }
 

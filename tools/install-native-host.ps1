@@ -29,6 +29,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Windows PowerShell 5.1 writes a byte-order mark for -Encoding utf8, and a BOM in front
+# of a native messaging manifest is three bytes Chrome's JSON parser has no idea what to
+# do with. The host then does not register, and the browser says only "host not found".
+function Write-Utf8NoBom {
+    param([Parameter(ValueFromPipeline = $true)] [string] $Content, [string] $Path)
+
+    process {
+        [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding $false))
+    }
+}
+
 $hostName = 'com.sdm.host'
 $browsers = @{
     'Chrome' = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts'
@@ -47,8 +58,14 @@ if ($Uninstall) {
     return
 }
 
+# Tested before resolving, not after. Resolve-Path throws on a path that is not there,
+# and with $ErrorActionPreference set to Stop that threw first — so the message below,
+# which says what to do about it, could never be reached.
+if (-not (Test-Path $HostPath)) {
+    throw "SDM.NativeHost.exe was not found at $HostPath. Build the solution first (dotnet build -c Release), or pass -HostPath."
+}
+
 $resolved = (Resolve-Path $HostPath).Path
-if (-not (Test-Path $resolved)) { throw "SDM.NativeHost.exe was not found at $resolved. Build the solution first." }
 
 # A Chrome extension id is thirty-two letters from a to p. Anything else registers happily
 # and then refuses every connection, with the browser reporting only "host not found".
@@ -56,7 +73,19 @@ if ($ExtensionId -notmatch '^[a-p]{32}$') {
     Write-Warning "'$ExtensionId' is not a valid extension id. The host will register, and no extension will be able to talk to it."
 }
 
-$manifestPath = Join-Path (Split-Path $resolved) "$hostName.json"
+# Written beside the user's own data, not beside the executable.
+#
+# It used to go into the build output folder, which is the one directory guaranteed not to
+# survive: `dotnet clean`, `git clean -xdf`, or deleting bin\ to force a rebuild all take
+# the manifest with them. The registry key stays behind pointing at a file that is no
+# longer there, so Chrome reports "Specified native messaging host not found" and the only
+# clue is a registry value that looks perfectly correct.
+#
+# The path inside the manifest still names the executable in the build output, and that
+# one is restored by the next build. Only the manifest itself had nowhere safe to live.
+$manifestDirectory = Join-Path $env:LOCALAPPDATA 'SDM'
+$null = New-Item -ItemType Directory -Force -Path $manifestDirectory
+$manifestPath = Join-Path $manifestDirectory "$hostName.json"
 
 @{
     name            = $hostName
@@ -64,7 +93,7 @@ $manifestPath = Join-Path (Split-Path $resolved) "$hostName.json"
     path            = $resolved
     type            = 'stdio'
     allowed_origins = @("chrome-extension://$ExtensionId/")
-} | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding utf8
+} | ConvertTo-Json -Depth 4 | Write-Utf8NoBom -Path $manifestPath
 
 "manifest $manifestPath"
 
