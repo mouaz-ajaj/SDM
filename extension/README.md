@@ -66,6 +66,20 @@ A download handed back is recorded, so that when it arrives a second time it is 
 alone. Without that it would be taken, refused, handed back and taken again for as long
 as the browser is open.
 
+Because cancelling first raises the price of every mistake, three things are refused
+before anything is cancelled rather than after:
+
+- **A file that answers a POST.** Asking for it again gets something else — a login page,
+  a 405, an error document — and handing it back cannot rescue it either, because that
+  issues a GET too. Chrome is the only thing that can still finish it.
+- **Anything that throws on the way.** Storage unavailable, a permission revoked
+  mid-session: the download is given back by settling its name, which is the one moment
+  that still works.
+- **A handover that never answers.** The host is given forty-five seconds — twice what it
+  allows itself to start SDM — and then the download goes back to Chrome. Without that
+  ceiling a native host that hangs rather than exits would leave the file fetched by
+  nobody, and nothing on screen to say so.
+
 Only `http` and `https` are taken over. A `blob:` or `data:` URL exists nowhere but inside
 the page that created it, and handing one to SDM would cancel a download that nothing else
 can then perform.

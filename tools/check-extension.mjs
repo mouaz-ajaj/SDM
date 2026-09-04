@@ -194,7 +194,12 @@ const chrome = {
     onStartup: slot("onStartup"),
     sendNativeMessage: (host, message, callback) => {
       sent.push({ host, message });
-      callback(handoverReply);
+
+      // A null reply stands for a host that hangs rather than answering — the case the
+      // handover timeout exists for.
+      if (handoverReply) {
+        callback(handoverReply);
+      }
     },
   },
   contextMenus: {
@@ -242,6 +247,10 @@ const chrome = {
 
 const context = {
   chrome,
+
+  // setTimeout is replaced so the 45-second handover timeout resolves at once. Waiting
+  // it out for real would make this check useless as a thing anyone runs.
+  setTimeout: (fn, delay) => setTimeout(fn, delay > 1000 ? 5 : delay),
   console: { log: () => {} },
   navigator: { userAgent: "Mozilla/5.0 (check)" },
   URL,
@@ -253,7 +262,6 @@ const context = {
   String,
   Number,
   Error,
-  setTimeout,
   decodeURIComponent,
 };
 
@@ -389,7 +397,57 @@ if (listeners.onSendHeaders && listeners.onDeterminingFilename) {
     check(status[key] === "ok", `the status panel reports "${key}" as ${status[key] ?? "not started"}`);
   }
 
-  notes.push("took one download before Chrome could ask, and handed one refused download back");
+  // ---- a file that answers a POST ----
+
+  handoverReply = { type: "accepted" };
+  sent.length = 0;
+  downloadCalls.length = 0;
+  handedBack.length = 0;
+
+  const posted = "https://example.test/export";
+
+  deliver("onSendHeaders", {
+    url: posted,
+    method: "POST",
+    type: "main_frame",
+    requestHeaders: [{ name: "Cookie", value: "session=abc123" }],
+  });
+
+  await settle();
+
+  const postSuggested = await deliverDownload({ ...newItem(posted), filename: "export.csv" });
+
+  // Asking for it again gets something else — a login page, a 405, an error document —
+  // and there is no rescue either, because handing it back issues a GET too. Chrome is
+  // the only thing that can still finish it, so it must be left alone before anything is
+  // cancelled.
+  check(
+    sent.length === 0,
+    "a download that answers a POST was handed to SDM, which can only ask for it again"
+  );
+  check(
+    !downloadCalls.some(([call]) => call === "cancel"),
+    "a download that answers a POST was cancelled — nothing left can complete it"
+  );
+  check(postSuggested === 1, "a download left to Chrome did not have its name settled");
+
+  // ---- SDM never answers at all ----
+
+  sent.length = 0;
+  downloadCalls.length = 0;
+  handedBack.length = 0;
+  handoverReply = null; // the callback is never invoked
+
+  await deliverDownload(newItem(url));
+
+  // The download is already cancelled by the time we are waiting, so a handover that
+  // never settles would leave the file fetched by nobody and nothing on screen to say so.
+  check(
+    downloadCalls.some(([call]) => call === "download"),
+    "SDM never answered and the download was neither taken nor given back — it is simply gone"
+  );
+
+  notes.push("took one, handed one back, left a POST alone, and survived a silent SDM");
 }
 
 // ---------------------------------------------------------------------------
