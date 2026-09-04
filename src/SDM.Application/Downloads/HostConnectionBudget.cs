@@ -31,7 +31,7 @@ public sealed class HostConnectionBudget : IConnectionBudget, IDisposable
         int wanted = Math.Clamp(desired, 1, _ceilingPerTransfer);
 
         // The first connection is worth waiting for: without it there is no transfer.
-        await slots.WaitAsync(cancellationToken);
+        await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
         int granted = 1;
 
         // The rest are opportunistic. Waiting for them would let one large transfer

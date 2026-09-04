@@ -38,7 +38,7 @@ public sealed class JsonUserSettingsStore : IUserSettingsStore
         System.IO.Directory.CreateDirectory(
             System.IO.Path.GetDirectoryName(Path) ?? SdmPaths.EnsureUserDataDirectory());
 
-        JsonObject root = await ReadExistingAsync(cancellationToken);
+        JsonObject root = await ReadExistingAsync(cancellationToken).ConfigureAwait(false);
         JsonObject downloads = root[DownloadsSection] as JsonObject ?? [];
 
         downloads["Folder"] = settings.DownloadFolder;
@@ -56,7 +56,7 @@ public sealed class JsonUserSettingsStore : IUserSettingsStore
         // Written whole and replaced in one move, so a crash mid-write cannot leave the
         // user with a half-written file the application then refuses to start with.
         string temporary = Path + ".tmp";
-        await File.WriteAllTextAsync(temporary, root.ToJsonString(WriteOptions), cancellationToken);
+        await File.WriteAllTextAsync(temporary, root.ToJsonString(WriteOptions), cancellationToken).ConfigureAwait(false);
         File.Move(temporary, Path, overwrite: true);
 
         _logger.LogInformation("Saved user settings to {SettingsPath}.", Path);
@@ -71,7 +71,7 @@ public sealed class JsonUserSettingsStore : IUserSettingsStore
 
         try
         {
-            string json = await File.ReadAllTextAsync(Path, cancellationToken);
+            string json = await File.ReadAllTextAsync(Path, cancellationToken).ConfigureAwait(false);
             return JsonNode.Parse(json) as JsonObject ?? [];
         }
         catch (Exception exception) when (exception is IOException or JsonException)

@@ -68,7 +68,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
 
     public async Task<IReadOnlyList<DownloadJob>> GetAllAsync(CancellationToken cancellationToken = default)
     {
-        await using SqliteConnection connection = await OpenAsync(cancellationToken);
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
 
         SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
@@ -79,9 +79,9 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
             """;
 
         List<DownloadJob> jobs = [];
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
-        while (await reader.ReadAsync(cancellationToken))
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             jobs.Add(new DownloadJob
             {
@@ -108,7 +108,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
     {
         ArgumentNullException.ThrowIfNull(job);
 
-        await using SqliteConnection connection = await OpenAsync(cancellationToken);
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
 
         SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
@@ -140,26 +140,26 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         command.Parameters.AddWithValue("$updated", job.UpdatedAt.ToString("O"));
         command.Parameters.AddWithValue("$media", (object?)job.MediaType ?? DBNull.Value);
 
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        await using SqliteConnection connection = await OpenAsync(cancellationToken);
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
 
         SqliteCommand command = connection.CreateCommand();
         command.CommandText = "DELETE FROM downloads WHERE id = $id;";
         command.Parameters.AddWithValue("$id", id.ToString());
 
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
     {
-        await EnsureInitializedAsync(cancellationToken);
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         SqliteConnection connection = new(_connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         return connection;
     }
 
@@ -170,7 +170,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
             return;
         }
 
-        await _initialization.WaitAsync(cancellationToken);
+        await _initialization.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -179,7 +179,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
                 return;
             }
 
-            await MigrateAsync(cancellationToken);
+            await MigrateAsync(cancellationToken).ConfigureAwait(false);
             _initialized = true;
         }
         finally
@@ -191,11 +191,11 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
     private async Task MigrateAsync(CancellationToken cancellationToken)
     {
         await using SqliteConnection connection = new(_connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
         SqliteCommand read = connection.CreateCommand();
         read.CommandText = "PRAGMA user_version;";
-        int applied = Convert.ToInt32(await read.ExecuteScalarAsync(cancellationToken), null);
+        int applied = Convert.ToInt32(await read.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), null);
 
         if (applied >= Migrations.Length)
         {
@@ -203,7 +203,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         }
 
         await using SqliteTransaction transaction = (SqliteTransaction)
-            await connection.BeginTransactionAsync(cancellationToken);
+            await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
         for (int version = applied; version < Migrations.Length; version++)
         {
@@ -213,10 +213,10 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
             // The pragma takes a literal, so it cannot be parameterised. The value is a
             // loop counter over a private array, never anything a user supplied.
             migrate.CommandText = Migrations[version] + $"\nPRAGMA user_version = {version + 1};";
-            await migrate.ExecuteNonQueryAsync(cancellationToken);
+            await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation(
             "Download database ready at {DatabasePath}; schema version {Version}.",

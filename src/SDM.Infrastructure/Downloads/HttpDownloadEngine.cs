@@ -73,9 +73,30 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        Directory.CreateDirectory(request.DestinationDirectory);
+        // Creating the folder and hunting for a partial file are both synchronous disk
+        // work, and the hunt walks the download folder. Nothing has been awaited yet, so
+        // on the caller's thread that walk is the interface thread — the window frozen for
+        // as long as a full Downloads folder takes to enumerate, once per transfer and
+        // again on every retry. Everything past this await is on a thread pool thread,
+        // which is where a transfer belongs.
+        ResumablePartial? existing = await Task.Run(
+            () =>
+            {
+                Directory.CreateDirectory(request.DestinationDirectory);
+                return PartialFile.FindFor(request.DestinationDirectory, request.Source);
+            },
+            cancellationToken).ConfigureAwait(false);
 
-        ResumablePartial? existing = PartialFile.FindFor(request.DestinationDirectory, request.Source);
+        // Taken before the idle clock is started, not after.
+        //
+        // A transfer waits here for as long as the host's other transfers hold its
+        // connections, and that can be minutes. Starting the clock first counted the wait
+        // as silence — from a server that had not yet been asked anything — so a transfer
+        // queued longer than the timeout failed the instant it was granted a connection,
+        // reporting that the server had stopped sending. Every retry then queued and died
+        // the same way.
+        using IConnectionLease lease = await _connectionBudget.AcquireAsync(
+            request.Source.Host, _options.CurrentValue.MaximumSegments, cancellationToken).ConfigureAwait(false);
 
         // One idle clock covers the whole transfer and is pushed forward whenever any
         // connection delivers, so a server that goes silent fails instead of hanging.
@@ -83,12 +104,9 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         using CancellationTokenSource linked =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, idle.Token);
 
-        using IConnectionLease lease = await _connectionBudget.AcquireAsync(
-            request.Source.Host, _options.CurrentValue.MaximumSegments, cancellationToken);
-
         return existing?.Metadata.Segments is { Length: > 0 }
-            ? await ResumeSegmentedAsync(request, existing, callbacks, idle, linked.Token, cancellationToken)
-            : await StartAsync(request, existing, lease, callbacks, idle, linked.Token, cancellationToken);
+            ? await ResumeSegmentedAsync(request, existing, callbacks, idle, linked.Token, cancellationToken).ConfigureAwait(false)
+            : await StartAsync(request, existing, lease, callbacks, idle, linked.Token, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<DownloadProbe> ProbeAsync(
@@ -104,7 +122,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         // name from Content-Disposition, the size from Content-Range, and proof of
         // range support from the status code itself.
         using HttpResponseMessage response = await SendAsync(
-            source, 0, 0, validator: null, context, linked.Token, cancellationToken);
+            source, 0, 0, validator: null, context, linked.Token, cancellationToken).ConfigureAwait(false);
 
         EnsureSuccess(response);
 
@@ -149,9 +167,9 @@ public sealed class HttpDownloadEngine : IDownloadEngine
 
         using HttpResponseMessage response = await SendAsync(
             request.Source, streamResumeFrom, null, existing?.Metadata.Validator, request.Context,
-            linkedToken, callerToken);
+            linkedToken, callerToken).ConfigureAwait(false);
 
-        await HandleStaleRangeAsync(response, existing, request);
+        await HandleStaleRangeAsync(response, existing, request).ConfigureAwait(false);
         EnsureSuccess(response);
 
         // Asking for a range and getting 200 means the server ignored it — either it does
@@ -194,9 +212,9 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         long bytesWritten = segmentCount > 1
             ? await RunSegmentedAsync(
                 request, partialPath, metadata, SegmentedTransfer.Split(totalBytes!.Value, segmentCount),
-                response, totalBytes.Value, callbacks, idle, linkedToken, callerToken)
+                response, totalBytes.Value, callbacks, idle, linkedToken, callerToken).ConfigureAwait(false)
             : await RunSingleStreamAsync(
-                response, partialPath, metadata, resumeFrom, totalBytes, callbacks, idle, linkedToken, callerToken);
+                response, partialPath, metadata, resumeFrom, totalBytes, callbacks, idle, linkedToken, callerToken).ConfigureAwait(false);
 
         return Complete(destination, partialPath, bytesWritten, totalBytes, mediaType, category, callbacks);
     }
@@ -229,7 +247,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
 
         long bytesWritten = await RunSegmentedAsync(
             request, existing.PartialPath, existing.Metadata, segments,
-            null, totalBytes, callbacks, idle, linkedToken, callerToken);
+            null, totalBytes, callbacks, idle, linkedToken, callerToken).ConfigureAwait(false);
 
         // A resumed transfer never re-reads the headers, so the category comes from the
         // name the first attempt already settled on.
@@ -276,7 +294,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
                     request.Source, segment.Position, segment.End, metadata.Validator, request.Context,
                     token, callerToken),
                 () => idle.CancelAfter(IdleTimeout),
-                linkedToken);
+                linkedToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
         {
@@ -302,7 +320,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
     {
         PartialFile.Write(partialPath, metadata);
 
-        await using Stream source = await response.Content.ReadAsStreamAsync(linkedToken);
+        await using Stream source = await response.Content.ReadAsStreamAsync(linkedToken).ConfigureAwait(false);
         await using FileStream target = new(
             partialPath,
             resumeFrom > 0 ? FileMode.Append : FileMode.Create,
@@ -319,11 +337,11 @@ public sealed class HttpDownloadEngine : IDownloadEngine
         try
         {
             int read;
-            while ((read = await source.ReadAsync(buffer, linkedToken)) > 0)
+            while ((read = await source.ReadAsync(buffer, linkedToken).ConfigureAwait(false)) > 0)
             {
                 idle.CancelAfter(IdleTimeout);
 
-                await target.WriteAsync(buffer.AsMemory(0, read), linkedToken);
+                await target.WriteAsync(buffer.AsMemory(0, read), linkedToken).ConfigureAwait(false);
                 bytesWritten += read;
 
                 // Report the first chunk immediately so the UI reacts at once, then throttle;
@@ -354,7 +372,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
                 $"The connection failed after {bytesWritten} bytes.", null, null, isTransient: true, exception);
         }
 
-        await target.FlushAsync(linkedToken);
+        await target.FlushAsync(linkedToken).ConfigureAwait(false);
         return bytesWritten;
     }
 
@@ -465,7 +483,7 @@ public sealed class HttpDownloadEngine : IDownloadEngine
 
         try
         {
-            return await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, linkedToken);
+            return await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, linkedToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
         {

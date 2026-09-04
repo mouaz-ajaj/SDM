@@ -33,18 +33,18 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
         // The host slot is taken first on purpose. Taking the global slot first would let
         // three transfers queued behind one busy server occupy every global slot and stall
         // downloads from other hosts that could have run immediately.
-        await host.WaitAsync(cancellationToken);
+        await host.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await _globalSlots.WaitAsync(cancellationToken);
+            await _globalSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             try
             {
                 // Only now is the transfer really beginning; the caller has been showing it
                 // as queued until this point.
                 callbacks?.Started?.Invoke();
-                return await _startDownload.ExecuteAsync(address, callbacks, destination, context, cancellationToken);
+                return await _startDownload.ExecuteAsync(address, callbacks, destination, context, cancellationToken).ConfigureAwait(false);
             }
             finally
             {

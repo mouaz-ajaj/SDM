@@ -407,6 +407,34 @@ public sealed class HttpDownloadEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAsync_WhenAPartIsAnsweredWithTheWholeFile_FailsRatherThanCorruptTheDownload()
+    {
+        using LocalHttpServer server = new(ServeAsync);
+        await using ServiceProvider provider = BuildProvider(maximumSegments: 4, segmentThresholdBytes: 1024);
+        IDownloadEngine engine = provider.GetRequiredService<IDownloadEngine>();
+
+        DownloadPlan? plan = null;
+
+        DownloadFailedException failure = await Assert.ThrowsAsync<DownloadFailedException>(
+            () => engine.DownloadAsync(
+                new DownloadRequest(server.Url("drops-ranges.bin"), _workingDirectory),
+                new DownloadCallbacks { Planned = value => plan = value },
+                TestContext.Current.CancellationToken));
+
+        // The transfer was split, so the parts that follow were asked for by range — and
+        // each was answered with the file from byte zero. Written at its own offset, that
+        // is the beginning of the file pasted into the middle: a corrupt download whose
+        // byte count and length both come out exactly right, so nothing downstream could
+        // have caught it. It has to fail here or not at all.
+        Assert.Equal(4, plan!.SegmentCount);
+        Assert.True(failure.IsTransient, "A misbehaving part is worth another attempt.");
+
+        Assert.False(
+            File.Exists(Path.Combine(_workingDirectory, "drops-ranges.bin")),
+            "No file may be promoted to its real name from parts the server never sent.");
+    }
+
+    [Fact]
     public async Task DownloadAsync_ResumesASplitTransferFromItsRecordedSegmentPositions()
     {
         using LocalHttpServer server = new(ServeAsync);
@@ -814,6 +842,25 @@ public sealed class HttpDownloadEngineTests : IDisposable
             case "/ignores-range.bin":
                 // Answers 200 with the whole body even when a Range was asked for, which
                 // is what a server without range support does.
+                context.Response.ContentLength64 = _payload.Length;
+                await WriteInChunksAsync(context, 0, cancellationToken);
+                break;
+
+            case "/drops-ranges.bin":
+                // Honours the open-ended "bytes=0-" that discovers whether a file can be
+                // split, then ignores every bounded range that follows — answering 200
+                // with the whole file where a part was asked for.
+                //
+                // Not a contrived server: a host answered by several machines, or one
+                // whose configuration changes mid-transfer, does exactly this. It is the
+                // shape that used to be written into the middle of the download and
+                // called finished.
+                if (context.Request.Headers["Range"] is { } asked && asked.TrimEnd().EndsWith('-'))
+                {
+                    await ServeRangeAsync(context, cancellationToken);
+                    break;
+                }
+
                 context.Response.ContentLength64 = _payload.Length;
                 await WriteInChunksAsync(context, 0, cancellationToken);
                 break;

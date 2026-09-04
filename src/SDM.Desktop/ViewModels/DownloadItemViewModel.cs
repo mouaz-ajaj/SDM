@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using Avalonia.Media;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -290,25 +291,40 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         _ => Status.ToString(),
     };
 
-    /// <summary>Runs the transfer to completion. Never throws: failures become status.</summary>
+    /// <summary>
+    /// Runs the transfer to completion. Never throws: failures become status. Called on
+    /// the interface thread, which is where everything it writes has to be written.
+    /// </summary>
     public async Task RunAsync()
     {
         _pauseRequested = false;
 
+        // Progress<T> posts to the interface thread by itself. The four below are plain
+        // delegates the engine invokes wherever it happens to be standing, so each is
+        // marshalled by hand: every one writes observable properties, and two of them add
+        // to collections the window is bound to — which a thread pool thread may not do.
         DownloadCallbacks callbacks = new()
         {
             Progress = new Progress<DownloadProgress>(OnProgress),
             Segments = new Progress<IReadOnlyList<SegmentProgress>>(OnSegments),
-            Planned = OnPlanned,
-            Retrying = OnRetry,
-            Started = OnStarted,
-            Verifying = OnVerifying,
+            Planned = plan => OnInterfaceThread(() => OnPlanned(plan)),
+            Retrying = retry => OnInterfaceThread(() => OnRetry(retry)),
+            Started = () => OnInterfaceThread(OnStarted),
+            Verifying = () => OnInterfaceThread(OnVerifying),
         };
 
         try
         {
-            DownloadResult result = await _scheduler.EnqueueAsync(
-                _address, callbacks, _destination, _context, _cancellation.Token);
+            // Task.Run, so the transfer begins on a thread pool thread with no
+            // synchronization context to capture. Awaited directly, the whole engine ran
+            // on the interface thread instead — every await inside it resumed there, so
+            // each 80 KB read, each write, the folder scan that looks for a partial file
+            // and the final move of a finished file were all pumped through the very
+            // dispatcher the window draws on.
+            DownloadResult result = await Task.Run(
+                () => _scheduler.EnqueueAsync(
+                    _address, callbacks, _destination, _context, _cancellation.Token),
+                CancellationToken.None);
 
             DestinationPath = result.DestinationPath;
             FileName = Path.GetFileName(result.DestinationPath);
@@ -537,6 +553,23 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             // Most likely the file is open in another program. The row still goes.
             _logger.LogWarning(exception, "Could not delete {Path}.", path);
             ActionFailed?.Invoke(this, $"{FileName} is in use and was not deleted.");
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> on the interface thread — immediately when already
+    /// there, so a callback raised from the queue is not reordered behind work the
+    /// dispatcher has yet to reach.
+    /// </summary>
+    private static void OnInterfaceThread(Action action)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(action);
         }
     }
 

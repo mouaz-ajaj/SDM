@@ -81,10 +81,10 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
                 await using NamedPipeServerStream server = CreateServer();
 
                 _waiting = server;
-                await server.WaitForConnectionAsync(cancellationToken);
+                await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 _waiting = null;
 
-                await ServeAsync(server, cancellationToken);
+                await ServeAsync(server, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -146,7 +146,7 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
         using StreamReader reader = new(server, leaveOpen: true);
         await using StreamWriter writer = new(server, leaveOpen: true) { AutoFlush = true };
 
-        string? line = await reader.ReadLineAsync(cancellationToken);
+        string? line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
 
         if (string.IsNullOrWhiteSpace(line))
         {
@@ -154,7 +154,7 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
         }
 
         BridgeReply reply = Handle(line);
-        await writer.WriteLineAsync(JsonSerializer.Serialize(reply, Json).AsMemory(), cancellationToken);
+        await writer.WriteLineAsync(JsonSerializer.Serialize(reply, Json).AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
     private BridgeReply Handle(string line)
@@ -221,7 +221,7 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
 
         if (!_shutdown.IsCancellationRequested)
         {
-            await _shutdown.CancelAsync();
+            await _shutdown.CancelAsync().ConfigureAwait(false);
         }
 
         // Cancelling the token is not enough. A WaitForConnectionAsync that no browser is
@@ -245,7 +245,7 @@ public sealed class NamedPipeBrowserBridge : IBrowserBridge
                 // Bounded, because nothing here is worth hanging an exit on. If the loop
                 // ever finds a new way to get stuck, the log says so and the process still
                 // closes.
-                await _acceptLoop.WaitAsync(ShutdownTimeout);
+                await _acceptLoop.WaitAsync(ShutdownTimeout).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

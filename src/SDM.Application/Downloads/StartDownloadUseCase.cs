@@ -43,7 +43,7 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
         {
             try
             {
-                return await _engine.DownloadAsync(request, callbacks, cancellationToken);
+                return await _engine.DownloadAsync(request, callbacks, cancellationToken).ConfigureAwait(false);
             }
             catch (DownloadFailedException failure)
                 when (failure.IsTransient && attempt < _options.CurrentValue.MaximumAttempts)
@@ -54,7 +54,7 @@ public sealed class StartDownloadUseCase : IStartDownloadUseCase
                 callbacks?.Retrying?.Invoke(
                     new DownloadRetry(attempt, _options.CurrentValue.MaximumAttempts, delay, failure.Message));
 
-                await Task.Delay(delay, cancellationToken);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }
     }

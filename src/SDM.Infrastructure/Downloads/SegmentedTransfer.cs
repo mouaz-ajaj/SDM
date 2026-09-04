@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Http.Headers;
 using Microsoft.Win32.SafeHandles;
 using SDM.Core.Downloads;
 
@@ -94,7 +96,7 @@ internal sealed class SegmentedTransfer
 
         try
         {
-            await Task.WhenAll(running);
+            await Task.WhenAll(running).ConfigureAwait(false);
         }
         finally
         {
@@ -116,11 +118,17 @@ internal sealed class SegmentedTransfer
     {
         SegmentState segment = _segments[index];
 
-        HttpResponseMessage response = reuse ?? await openSegment(segment, cancellationToken);
+        HttpResponseMessage response =
+            reuse ?? await openSegment(segment, cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await using Stream source = await response.Content.ReadAsStreamAsync(cancellationToken);
+            // Before the stream is even opened, and so before a single byte can be
+            // written at this segment's offset.
+            EnsureAnswersTheRange(response, segment);
+
+            await using Stream source =
+                await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
 
             byte[] buffer = new byte[BufferSize];
             long position = segment.Position;
@@ -129,7 +137,7 @@ internal sealed class SegmentedTransfer
             while (remaining > 0)
             {
                 int wanted = (int)Math.Min(buffer.Length, remaining);
-                int read = await source.ReadAsync(buffer.AsMemory(0, wanted), cancellationToken);
+                int read = await source.ReadAsync(buffer.AsMemory(0, wanted), cancellationToken).ConfigureAwait(false);
 
                 if (read <= 0)
                 {
@@ -138,7 +146,7 @@ internal sealed class SegmentedTransfer
 
                 // Positional writes on a shared handle are safe because segments never
                 // overlap, and they avoid a lock around the file for every chunk.
-                await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, read), position, cancellationToken);
+                await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, read), position, cancellationToken).ConfigureAwait(false);
 
                 position += read;
                 remaining -= read;
@@ -159,6 +167,55 @@ internal sealed class SegmentedTransfer
         finally
         {
             response.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Proves the response really is the byte range this segment asked for.
+    ///
+    /// A segment writes straight to its own offset and stops reading after its own
+    /// length, so a server that answers 200 with the whole file — or 206 with a
+    /// different range — has the beginning of the file copied into the middle of the
+    /// download, and the loop below finishes without complaining. Nothing downstream
+    /// catches it either: the byte count and the file's length both come out exactly
+    /// right, so verification passes, the partial file is deleted, and the transfer is
+    /// reported as finished. The first sign of trouble would be the user opening a
+    /// corrupt archive weeks later.
+    ///
+    /// Ranges are optional in HTTP, so this is not hypothetical. Segmenting is only
+    /// chosen after one 206, and a host answered by several machines can honour a range
+    /// on that connection and ignore it on the next.
+    ///
+    /// Transient, because nothing has been written: the partial file is still exactly as
+    /// correct as it was, and the retry asks for the same range again.
+    /// </summary>
+    private static void EnsureAnswersTheRange(HttpResponseMessage response, SegmentState segment)
+    {
+        if (response.StatusCode != HttpStatusCode.PartialContent)
+        {
+            throw new DownloadFailedException(
+                $"The server answered {(int)response.StatusCode} {response.StatusCode} instead of the "
+                + $"{segment.Position}–{segment.End} byte range this part asked for.",
+                (int)response.StatusCode,
+                retryAfter: null,
+                isTransient: true);
+        }
+
+        ContentRangeHeaderValue? range = response.Content.Headers.ContentRange;
+
+        // Only where it starts is compared. The first response is reused for segment zero
+        // and was opened without an end — "bytes=0-", the request that discovered the file
+        // could be split at all — so its range legitimately runs past this segment. Where
+        // it ends is enforced by the read loop, which stops at the segment's own length
+        // and treats anything short as a failure.
+        if (range is not { HasRange: true } || range.From != segment.Position)
+        {
+            throw new DownloadFailedException(
+                $"This part asked to start at byte {segment.Position} and the server sent "
+                + $"{range?.ToString() ?? "no range at all"}.",
+                (int)response.StatusCode,
+                retryAfter: null,
+                isTransient: true);
         }
     }
 
