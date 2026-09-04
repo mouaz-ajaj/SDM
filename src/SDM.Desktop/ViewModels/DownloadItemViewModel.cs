@@ -205,7 +205,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         ArgumentNullException.ThrowIfNull(shell);
 
         DownloadItemViewModel item = new(
-            scheduler, repository, shell, logger, job.Id, job.Address, job.CreatedAt)
+            scheduler, repository, shell, logger, job.Id, job.Address, job.CreatedAt,
+            DestinationFor(job))
         {
             DestinationPath = job.DestinationPath,
             _bytesReceived = job.BytesReceived,
@@ -243,6 +244,24 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
 
         return item;
     }
+
+    /// <summary>
+    /// Gives a restored row back the destination the user picked for it, and only then.
+    ///
+    /// Resuming looks for the partial file inside the folder the transfer is told to
+    /// write into. A row restored without its folder was told the default one, found
+    /// nothing there, and started the whole download again — into the default folder,
+    /// not the drive the user had chosen. Both halves of that were wrong.
+    ///
+    /// A row SDM sorted itself is deliberately left alone: handing back the category
+    /// folder as though the user had chosen it would turn off the sorting and the
+    /// "name (1)" that keeps a second copy from overwriting the first.
+    /// </summary>
+    private static DownloadDestination? DestinationFor(DownloadJob job) =>
+        job is { ChosenByUser: true, DestinationPath: { Length: > 0 } path }
+        && Path.GetDirectoryName(path) is { Length: > 0 } directory
+            ? new DownloadDestination(directory, Path.GetFileName(path))
+            : null;
 
     public string Address => _address;
 
@@ -378,6 +397,21 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         catch (UnauthorizedAccessException)
         {
             Settle(DownloadStatus.Failed, "Access to the download folder was denied");
+        }
+        catch (Exception exception)
+        {
+            // The clauses above name the failures that were expected, and the list was
+            // not complete: HttpRequestException raised while a split transfer opens its
+            // parts reaches here, and so does anything a future change adds. Because this
+            // method is started and not awaited, every one of those became an unobserved
+            // task exception — the row sat on "Downloading" for ever, with no message, no
+            // failure, and a resume button that could not be pressed because the row was
+            // still, as far as it knew, running.
+            //
+            // A row that cannot say what went wrong is worse than one that says something
+            // vague, so nothing gets out of here uncaught.
+            _logger.LogError(exception, "Transfer {JobId} failed unexpectedly.", _id);
+            Settle(DownloadStatus.Failed, $"Transfer failed: {exception.Message}");
         }
     }
 
@@ -782,6 +816,7 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
             Detail = Detail,
             MediaType = _mediaType,
             Category = _category,
+            ChosenByUser = _destination is not null,
             CreatedAt = _createdAt,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -36,6 +37,14 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         """
         ALTER TABLE downloads ADD COLUMN media_type TEXT NULL;
         """,
+
+        // Whether the destination came from a save dialog. Without it a restored row
+        // could not tell a folder the user picked from one SDM sorted the file into, so
+        // resuming a transfer saved somewhere else looked in the wrong place, found no
+        // partial file, and started the whole download again into the default folder.
+        """
+        ALTER TABLE downloads ADD COLUMN chosen_by_user INTEGER NOT NULL DEFAULT 0;
+        """,
     ];
 
     private readonly SemaphoreSlim _initialization = new(1, 1);
@@ -73,7 +82,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, address, destination_path, bytes_received, total_bytes,
-                   status, detail, created_at, updated_at, media_type
+                   status, detail, created_at, updated_at, media_type, chosen_by_user
             FROM downloads
             ORDER BY created_at DESC;
             """;
@@ -92,9 +101,10 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
                 TotalBytes = reader.IsDBNull(4) ? null : reader.GetInt64(4),
                 Status = (DownloadStatus)reader.GetInt32(5),
                 Detail = reader.IsDBNull(6) ? null : reader.GetString(6),
-                CreatedAt = DateTimeOffset.Parse(reader.GetString(7), null),
-                UpdatedAt = DateTimeOffset.Parse(reader.GetString(8), null),
+                CreatedAt = ReadTimestamp(reader, 7),
+                UpdatedAt = ReadTimestamp(reader, 8),
                 MediaType = reader.IsDBNull(9) ? null : reader.GetString(9),
+                ChosenByUser = reader.GetInt32(10) != 0,
                 Category = FileCategories.Resolve(
                     reader.IsDBNull(2) ? null : Path.GetFileName(reader.GetString(2)),
                     reader.IsDBNull(9) ? null : reader.GetString(9)),
@@ -114,10 +124,10 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         command.CommandText = """
             INSERT INTO downloads
                 (id, address, destination_path, bytes_received, total_bytes,
-                 status, detail, created_at, updated_at, media_type)
+                 status, detail, created_at, updated_at, media_type, chosen_by_user)
             VALUES
                 ($id, $address, $destination, $received, $total,
-                 $status, $detail, $created, $updated, $media)
+                 $status, $detail, $created, $updated, $media, $chosen)
             ON CONFLICT(id) DO UPDATE SET
                 address          = excluded.address,
                 destination_path = excluded.destination_path,
@@ -126,6 +136,7 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
                 status           = excluded.status,
                 detail           = excluded.detail,
                 media_type       = excluded.media_type,
+                chosen_by_user   = excluded.chosen_by_user,
                 updated_at       = excluded.updated_at;
             """;
 
@@ -136,9 +147,10 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
         command.Parameters.AddWithValue("$total", (object?)job.TotalBytes ?? DBNull.Value);
         command.Parameters.AddWithValue("$status", (int)job.Status);
         command.Parameters.AddWithValue("$detail", (object?)job.Detail ?? DBNull.Value);
-        command.Parameters.AddWithValue("$created", job.CreatedAt.ToString("O"));
-        command.Parameters.AddWithValue("$updated", job.UpdatedAt.ToString("O"));
+        command.Parameters.AddWithValue("$created", job.CreatedAt.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$updated", job.UpdatedAt.ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$media", (object?)job.MediaType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$chosen", job.ChosenByUser ? 1 : 0);
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -153,6 +165,23 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Reads a timestamp back the way it was written: round-trip format, invariant
+    /// culture, and no reinterpretation of the offset it already carries.
+    ///
+    /// These are written with "O" and were being read with the current culture. On a
+    /// machine whose culture uses a non-Gregorian calendar — an Arabic Windows with the
+    /// Hijri calendar, say — "2026-09-04T…" is read as a year in that calendar, so the
+    /// whole list either fails to load or comes back with dates that sort wrongly. What a
+    /// row was written by has nothing to do with what a person's machine displays.
+    /// </summary>
+    private static DateTimeOffset ReadTimestamp(SqliteDataReader reader, int ordinal) =>
+        DateTimeOffset.ParseExact(
+            reader.GetString(ordinal),
+            "O",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind);
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
     {

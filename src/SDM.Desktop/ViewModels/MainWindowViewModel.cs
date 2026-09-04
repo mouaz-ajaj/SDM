@@ -158,8 +158,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // Started only once the list is restored, so a link arriving in the first second
         // is not lost or duplicated against a half-built list.
         _bridge.DownloadRequested += OnBrowserRequest;
-        await _bridge.StartAsync();
+        _bridge.ShowRequested += OnShowRequest;
+
+        try
+        {
+            await _bridge.StartAsync();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The window is already open and the list is already restored. A bridge that
+            // will not start costs the browser handover and nothing else, so it is
+            // reported where the user can see it rather than taken as a startup failure.
+            _logger.LogError(exception, "The browser bridge could not start.");
+            ErrorMessage = "The browser bridge could not start. Links from the browser will not arrive.";
+        }
     }
+
+    /// <summary>
+    /// A second launch of SDM asking this copy to come forward. Raised on the bridge's
+    /// own thread, so the window is touched from the interface thread.
+    /// </summary>
+    private void OnShowRequest(object? sender, EventArgs e) =>
+        Dispatcher.UIThread.Post(() => ShowRequested?.Invoke(this, EventArgs.Empty));
+
+    /// <summary>
+    /// Asks the window to bring itself forward. The view model does not own the window
+    /// and cannot raise it; the window listens for this and does.
+    /// </summary>
+    public event EventHandler? ShowRequested;
 
     /// <summary>
     /// A link handed over by the browser. The bridge raises this on its own thread, so
@@ -174,6 +200,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Dispatcher.UIThread.Post(() =>
         {
+            if (AlreadyInFlight(url) is { } existing)
+            {
+                _logger.LogInformation("The browser sent {Url}, which this list is already downloading.", url);
+                Selected = existing;
+                ErrorMessage = $"{existing.FileName} is already in the list.";
+                return;
+            }
+
             DownloadItemViewModel item = DownloadItemViewModel.Create(
                 _scheduler, _repository, _shell, _logger, url, context: message.ToRequestContext());
 
@@ -182,6 +216,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _ = item.RunAsync();
         });
     }
+
+    /// <summary>
+    /// The row already working on this address, if there is one.
+    ///
+    /// Two rows for one address is not a duplicate in the list: it is two transfers
+    /// writing into the same partial file at once, because the file a transfer resumes
+    /// from is found by its URL. They interleave their bytes and the result is a corrupt
+    /// file that both rows report as finished. A double-click on a download button is
+    /// enough to cause it.
+    ///
+    /// Finished and cancelled rows are not in the way — they own nothing on disk that a
+    /// new transfer would collide with. A failed one does: its partial file is still
+    /// there waiting for the resume button, so it counts.
+    /// </summary>
+    private DownloadItemViewModel? AlreadyInFlight(string address) =>
+        All.FirstOrDefault(item =>
+            !item.IsFinished
+            && string.Equals(item.Address, address.Trim(), StringComparison.OrdinalIgnoreCase));
 
     public string BridgeAddress => _bridge.Address;
 
@@ -202,6 +254,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         ErrorMessage = null;
+
+        if (AlreadyInFlight(address) is { } running)
+        {
+            Selected = running;
+            ErrorMessage = $"{running.FileName} is already in the list.";
+            return;
+        }
+
         DownloadDestination? destination = null;
 
         if (_options.CurrentValue.AskWhereToSave)
@@ -358,6 +418,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         _bridge.DownloadRequested -= OnBrowserRequest;
+        _bridge.ShowRequested -= OnShowRequest;
         await _bridge.DisposeAsync();
     }
 

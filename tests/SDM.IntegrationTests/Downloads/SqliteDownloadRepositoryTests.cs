@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SDM.Application.Downloads;
@@ -119,6 +120,55 @@ public sealed class SqliteDownloadRepositoryTests : IDisposable
             () => Create().GetAllAsync(TestContext.Current.CancellationToken));
 
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public async Task SaveAsync_RemembersThatTheUserChoseTheDestination()
+    {
+        SqliteDownloadRepository repository = Create();
+
+        await repository.SaveAsync(
+            NewJob() with { DestinationPath = @"D:\Work\file.bin", ChosenByUser = true },
+            TestContext.Current.CancellationToken);
+
+        DownloadJob stored = Assert.Single(await repository.GetAllAsync(TestContext.Current.CancellationToken));
+
+        // Without this a restored row cannot tell a folder the user picked from one SDM
+        // sorted the file into, so resuming looked in the default folder, found no
+        // partial file, and started the download again in the wrong place.
+        Assert.True(stored.ChosenByUser);
+    }
+
+    [Fact]
+    public async Task GetAllAsync_ReadsTimestampsBackUnderACalendarThatIsNotGregorian()
+    {
+        SqliteDownloadRepository repository = Create();
+        DateTimeOffset created = new(2026, 9, 4, 13, 45, 12, TimeSpan.FromHours(3));
+
+        await repository.SaveAsync(
+            NewJob() with { CreatedAt = created, UpdatedAt = created },
+            TestContext.Current.CancellationToken);
+
+        // Timestamps are written round-trip and were being read with the machine's own
+        // culture. On an Arabic Windows set to the Hijri calendar that reads "2026" as a
+        // Hijri year: the whole list either failed to load or came back sorted wrongly.
+        // What the machine displays has nothing to do with what the column holds.
+        CultureInfo original = CultureInfo.CurrentCulture;
+        CultureInfo hijri = new("ar-SA") { DateTimeFormat = { Calendar = new UmAlQuraCalendar() } };
+
+        try
+        {
+            CultureInfo.CurrentCulture = hijri;
+
+            DownloadJob stored = Assert.Single(
+                await repository.GetAllAsync(TestContext.Current.CancellationToken));
+
+            Assert.Equal(created, stored.CreatedAt);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 
     [Fact]

@@ -38,8 +38,25 @@ public sealed partial class MainWindow : Window
 
         if (DataContext is MainWindowViewModel viewModel)
         {
+            viewModel.ShowRequested += OnShowRequested;
             await viewModel.LoadAsync();
         }
+    }
+
+    /// <summary>
+    /// Brings the window forward for a second launch of SDM, which sends this and then
+    /// exits rather than starting a copy that would fight the first over the pipe, the
+    /// database and the partial files.
+    /// </summary>
+    private void OnShowRequested(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Show();
+        Activate();
     }
 
     /// <summary>
