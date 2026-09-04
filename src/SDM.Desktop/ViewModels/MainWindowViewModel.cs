@@ -34,7 +34,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IDownloadRepository _repository;
     private readonly IDownloadFolder _downloadFolder;
     private readonly ISaveLocationPicker _picker;
-    private readonly DialogSaveLocationPicker _dialogs;
+    private readonly IAppDialogs _dialogs;
     private readonly ISystemShell _shell;
     private readonly IOptionsMonitor<DownloadOptions> _options;
     private readonly IBrowserBridge _bridge;
@@ -71,7 +71,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IDownloadRepository repository,
         IDownloadFolder downloadFolder,
         ISaveLocationPicker picker,
-        DialogSaveLocationPicker dialogs,
+        IAppDialogs dialogs,
         ISystemShell shell,
         IOptionsMonitor<DownloadOptions> options,
         IBrowserBridge bridge,
@@ -488,6 +488,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (e.PropertyName is nameof(DownloadItemViewModel.Status)
             or nameof(DownloadItemViewModel.CategoryName))
         {
+            // Raised here as well as on a collection change: this property is derived
+            // from the rows' own statuses, so a download finishing changes it without the
+            // list itself changing at all, and anything bound to it went stale.
+            OnPropertyChanged(nameof(HasActiveDownloads));
             Refresh();
         }
         else if (e.PropertyName is nameof(DownloadItemViewModel.SpeedText))
@@ -503,17 +507,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Refresh();
     }
 
-    /// <summary>Rebuilds the visible rows and every count in the sidebar.</summary>
+    /// <summary>Brings the visible rows and every count in the sidebar up to date.</summary>
     private void Refresh()
     {
         DownloadItemViewModel? keep = Selected;
 
-        Visible.Clear();
-
-        foreach (DownloadItemViewModel item in All.Where(Matches))
-        {
-            Visible.Add(item);
-        }
+        SyncVisible();
 
         foreach (FilterOptionViewModel option in Filters)
         {
@@ -526,11 +525,59 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 item => string.Equals(item.CategoryName, category.Name, StringComparison.Ordinal));
         }
 
-        // Clearing the collection drops the selection, so it is put back rather than
-        // making the detail panel blink every time a row changes status.
-        Selected = keep is not null && Visible.Contains(keep) ? keep : Visible.FirstOrDefault();
+        // Only when the row that was selected is genuinely no longer on screen.
+        if (keep is null || !Visible.Contains(keep))
+        {
+            Selected = Visible.FirstOrDefault();
+        }
 
         UpdateTotals();
+    }
+
+    /// <summary>
+    /// Moves <see cref="Visible"/> to what it should hold, changing only what differs.
+    ///
+    /// This used to clear the collection and refill it, and it runs whenever any row
+    /// changes status — several times a second across a busy list. Every rebuild reset
+    /// the table's scroll position, dropped and restored the selection under the user,
+    /// and made the detail panel blink. Almost every one of those rebuilds produced the
+    /// list that was already there.
+    /// </summary>
+    private void SyncVisible()
+    {
+        List<DownloadItemViewModel> wanted = [.. All.Where(Matches)];
+
+        if (Visible.SequenceEqual(wanted))
+        {
+            return;
+        }
+
+        for (int index = Visible.Count - 1; index >= 0; index--)
+        {
+            if (!wanted.Contains(Visible[index]))
+            {
+                Visible.RemoveAt(index);
+            }
+        }
+
+        for (int index = 0; index < wanted.Count; index++)
+        {
+            if (index < Visible.Count && ReferenceEquals(Visible[index], wanted[index]))
+            {
+                continue;
+            }
+
+            int existing = Visible.IndexOf(wanted[index]);
+
+            if (existing >= 0)
+            {
+                Visible.Move(existing, index);
+            }
+            else
+            {
+                Visible.Insert(index, wanted[index]);
+            }
+        }
     }
 
     private bool Matches(DownloadItemViewModel item)
@@ -543,17 +590,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return TransferFilters.Matches(SelectedFilter?.Filter ?? TransferFilter.All, item);
     }
 
+    /// <summary>
+    /// One pass, not four. This is called on every speed report — ten times a second for
+    /// each running transfer — and walked the whole list once per figure it produced.
+    /// </summary>
     private void UpdateTotals()
     {
-        int running = All.Count(item => item.Status is DownloadStatus.Running);
-        int queued = All.Count(item => item.Status is DownloadStatus.Pending);
-        int paused = All.Count(item => item.Status is DownloadStatus.Paused);
+        int running = 0;
+        int queued = 0;
+        int paused = 0;
+        double bytesPerSecond = 0;
+
+        foreach (DownloadItemViewModel item in All)
+        {
+            switch (item.Status)
+            {
+                case DownloadStatus.Running: running++; break;
+                case DownloadStatus.Pending: queued++; break;
+                case DownloadStatus.Paused: paused++; break;
+                default: break;
+            }
+
+            bytesPerSecond += item.BytesPerSecond;
+        }
 
         TotalsText = All.Count == 0
             ? "Nothing downloading"
             : $"{running} active · {queued} queued · {paused} paused";
 
-        double bytesPerSecond = All.Sum(item => item.BytesPerSecond);
         TotalSpeedText = bytesPerSecond > 0 ? FormatBytes((long)bytesPerSecond) + "/s" : string.Empty;
     }
 

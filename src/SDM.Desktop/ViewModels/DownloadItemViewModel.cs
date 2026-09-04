@@ -26,6 +26,12 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private const double SmoothingFactor = 0.3;
     private const double MinimumSampleSeconds = 0.15;
 
+    /// <summary>
+    /// How long a cancelled transfer is given to unwind before the window stops waiting.
+    /// Long enough for a connection to notice, short enough not to hang an exit.
+    /// </summary>
+    private static readonly TimeSpan UnwindTimeout = TimeSpan.FromSeconds(10);
+
     private readonly IDownloadScheduler _scheduler;
     private readonly IDownloadRepository _repository;
     private readonly ISystemShell _shell;
@@ -43,6 +49,10 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     private readonly DateTimeOffset _createdAt;
 
     private CancellationTokenSource _cancellation = new();
+
+    /// <summary>The transfer in flight, so stopping the row can wait for it by name.</summary>
+    private Task _running = Task.CompletedTask;
+
     private long _bytesReceived;
     private long? _totalBytes;
     private string? _mediaType;
@@ -324,7 +334,13 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
     /// Runs the transfer to completion. Never throws: failures become status. Called on
     /// the interface thread, which is where everything it writes has to be written.
     /// </summary>
-    public async Task RunAsync()
+    /// <remarks>
+    /// The task is kept so that stopping the row can wait for the real thing rather than
+    /// for a guess about how long unwinding takes.
+    /// </remarks>
+    public Task RunAsync() => _running = RunCoreAsync();
+
+    private async Task RunCoreAsync()
     {
         _pauseRequested = false;
 
@@ -434,11 +450,28 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         }
 
         _pauseRequested = keepPartialFile;
-        _cancellation.Cancel();
+        await _cancellation.CancelAsync();
 
-        for (int attempt = 0; attempt < 100 && IsActive; attempt++)
+        // The transfer's own task, waited for directly. This used to poll IsActive every
+        // 20 ms and give up after two seconds — a guess at how long unwinding takes, which
+        // is wrong in both directions: it waits when the transfer stopped at once, and it
+        // walks away while the transfer is still writing when a connection is slow to
+        // notice the cancellation. Walking away is what mattered: the row's final state
+        // was then written while it was still changing.
+        //
+        // The wait is still bounded, because the window is closing and nothing here is
+        // worth hanging an exit on. RunAsync turns every failure into status and never
+        // throws, so there is nothing to catch from the task itself.
+        try
         {
-            await Task.Delay(20);
+            await _running.WaitAsync(UnwindTimeout);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning(
+                "Transfer {JobId} did not stop within {Timeout}; its state is being written anyway.",
+                _id,
+                UnwindTimeout);
         }
 
         // Persist() runs detached everywhere else so it never blocks a transfer, but the

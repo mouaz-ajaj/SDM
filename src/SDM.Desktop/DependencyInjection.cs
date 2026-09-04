@@ -22,6 +22,8 @@ public static class DependencyInjection
         services.AddSingleton<DialogSaveLocationPicker>();
         services.AddSingleton<ISaveLocationPicker>(
             provider => provider.GetRequiredService<DialogSaveLocationPicker>());
+        services.AddSingleton<IAppDialogs>(
+            provider => provider.GetRequiredService<DialogSaveLocationPicker>());
 
         services.AddTransient<MainWindowViewModel>();
         services.AddTransient<MainWindow>();

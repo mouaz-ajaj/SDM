@@ -54,6 +54,14 @@ internal sealed class SegmentedTransfer
     /// </summary>
     public static SegmentState[] Split(long totalBytes, int count)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(totalBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+
+        // More connections than bytes gives every segment a size of zero, which is a
+        // start of 0 and an end of -1 — overlapping ranges over a negative length. Only
+        // the segment threshold kept that unreachable, and a threshold is a setting.
+        count = (int)Math.Min(count, totalBytes);
+
         long size = totalBytes / count;
         SegmentState[] segments = new SegmentState[count];
 
@@ -222,6 +230,8 @@ internal sealed class SegmentedTransfer
     private void Advance(int index, int bytes)
     {
         bool checkpoint;
+        long written = 0;
+        IReadOnlyList<SegmentProgress>? snapshot = null;
 
         lock (_sync)
         {
@@ -230,8 +240,12 @@ internal sealed class SegmentedTransfer
 
             if (_sinceLastReport.Elapsed >= ProgressInterval)
             {
-                _progress?.Report(new DownloadProgress(_bytesWritten, _totalBytes));
-                _segmentProgress?.Report(Snapshot());
+                // Taken here, reported below. Every connection passes through this lock
+                // for each 80 KB it writes, and reporting inside it handed the interface
+                // — whose implementation of IProgress is not ours and may do anything —
+                // the right to hold every other connection still while it worked.
+                written = _bytesWritten;
+                snapshot = Snapshot();
                 _sinceLastReport.Restart();
             }
 
@@ -241,6 +255,12 @@ internal sealed class SegmentedTransfer
             {
                 _sinceLastCheckpoint.Restart();
             }
+        }
+
+        if (snapshot is not null)
+        {
+            _progress?.Report(new DownloadProgress(written, _totalBytes));
+            _segmentProgress?.Report(snapshot);
         }
 
         if (checkpoint)

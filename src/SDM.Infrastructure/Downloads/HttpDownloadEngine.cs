@@ -452,7 +452,11 @@ public sealed class HttpDownloadEngine : IDownloadEngine
             return 1;
         }
 
-        return Math.Clamp(Math.Min(availableConnections, _options.CurrentValue.MaximumSegments), 1, 16);
+        int wanted = Math.Clamp(Math.Min(availableConnections, _options.CurrentValue.MaximumSegments), 1, 16);
+
+        // Never more parts than there are bytes to put in them. Only the threshold kept
+        // that out of reach, and the threshold is a setting anyone can lower.
+        return (int)Math.Min(wanted, total);
     }
 
     private async Task<HttpResponseMessage> SendAsync(

@@ -12,7 +12,7 @@ namespace SDM.Desktop.Services;
 /// name, size, type and whether it can be resumed — which is what actually decides where
 /// someone wants to put it.
 /// </summary>
-public sealed class DialogSaveLocationPicker : ISaveLocationPicker
+public sealed class DialogSaveLocationPicker : ISaveLocationPicker, IAppDialogs
 {
     private readonly IServiceProvider _services;
     private readonly StorageProviderFolderPicker _folderPicker;

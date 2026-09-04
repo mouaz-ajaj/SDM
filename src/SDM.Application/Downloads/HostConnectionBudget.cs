@@ -44,15 +44,13 @@ public sealed class HostConnectionBudget : IConnectionBudget, IDisposable
         return new Lease(slots, granted);
     }
 
-    public void Dispose()
-    {
-        foreach (SemaphoreSlim slots in _hosts.Values)
-        {
-            slots.Dispose();
-        }
-
-        _hosts.Clear();
-    }
+    /// <summary>
+    /// Leaves the semaphores alone, for the same reason <see cref="DownloadScheduler"/>
+    /// does: a transfer still waiting for a connection when the container is disposed
+    /// would have its wait turned into an ObjectDisposedException, and fail for a reason
+    /// that is not about the download.
+    /// </summary>
+    public void Dispose() => _hosts.Clear();
 
     private sealed class Lease(SemaphoreSlim slots, int count) : IConnectionLease
     {

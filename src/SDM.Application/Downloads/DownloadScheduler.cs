@@ -71,15 +71,15 @@ public sealed class DownloadScheduler : IDownloadScheduler, IDisposable
         return _hostSlots.GetOrAdd(key, _ => new SemaphoreSlim(_maximumPerHost, _maximumPerHost));
     }
 
-    public void Dispose()
-    {
-        _globalSlots.Dispose();
-
-        foreach (SemaphoreSlim host in _hostSlots.Values)
-        {
-            host.Dispose();
-        }
-
-        _hostSlots.Clear();
-    }
+    /// <summary>
+    /// Deliberately leaves the semaphores alone.
+    ///
+    /// This is disposed with the container, while transfers may still be waiting on these
+    /// slots — a queued download turns its wait into an ObjectDisposedException the
+    /// moment they go, which surfaces as a row failing for a reason that has nothing to
+    /// do with the download. A SemaphoreSlim that is never waited on again holds no
+    /// unmanaged resource worth reclaiming from a process that is exiting anyway; the
+    /// dictionary is cleared so nothing new can find one.
+    /// </summary>
+    public void Dispose() => _hostSlots.Clear();
 }
