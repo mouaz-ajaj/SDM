@@ -137,9 +137,16 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
                 detail           = excluded.detail,
                 media_type       = excluded.media_type,
                 chosen_by_user   = excluded.chosen_by_user,
-                updated_at       = excluded.updated_at;
+                updated_at       = excluded.updated_at
+            WHERE excluded.updated_at >= downloads.updated_at;
             """;
 
+        // The WHERE above is what keeps an older snapshot from winning. Rows save
+        // themselves without being awaited, from several transfers at once, so the order
+        // the writes reach SQLite in is not the order they were taken in — and a row that
+        // had just completed could be put back to "Downloading" by a progress snapshot
+        // taken a moment earlier. Timestamps are round-trip and always UTC, so comparing
+        // them as text compares them as instants.
         command.Parameters.AddWithValue("$id", job.Id.ToString());
         command.Parameters.AddWithValue("$address", job.Address);
         command.Parameters.AddWithValue("$destination", (object?)job.DestinationPath ?? DBNull.Value);
@@ -189,6 +196,15 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
 
         SqliteConnection connection = new(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        // Per connection, and cheap. Rows save themselves from several transfers at once
+        // and a writer holds the database briefly; without this the loser gets "database
+        // is locked" at once rather than waiting the moment out, and a row's state is
+        // simply lost. Waiting is the correct answer to a lock that lasts milliseconds.
+        SqliteCommand busy = connection.CreateCommand();
+        busy.CommandText = "PRAGMA busy_timeout = 5000;";
+        await busy.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
         return connection;
     }
 
@@ -221,6 +237,14 @@ public sealed class SqliteDownloadRepository : IDownloadRepository
     {
         await using SqliteConnection connection = new(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        // Set once and recorded in the file itself, so this is the only place it belongs.
+        // The default journal makes a reader and a writer exclude each other, and this
+        // list is read while several transfers are writing to it. Under write-ahead
+        // logging they do not block one another at all.
+        SqliteCommand journal = connection.CreateCommand();
+        journal.CommandText = "PRAGMA journal_mode = WAL;";
+        await journal.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
         SqliteCommand read = connection.CreateCommand();
         read.CommandText = "PRAGMA user_version;";

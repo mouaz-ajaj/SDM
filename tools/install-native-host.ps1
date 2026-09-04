@@ -29,6 +29,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Windows PowerShell 5.1 writes a byte-order mark for -Encoding utf8, and a BOM in front
+# of a native messaging manifest is three bytes Chrome's JSON parser has no idea what to
+# do with. The host then does not register, and the browser says only "host not found".
+function Write-Utf8NoBom {
+    param([Parameter(ValueFromPipeline = $true)] [string] $Content, [string] $Path)
+
+    process {
+        [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding $false))
+    }
+}
+
 $hostName = 'com.sdm.host'
 $browsers = @{
     'Chrome' = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts'
@@ -47,8 +58,14 @@ if ($Uninstall) {
     return
 }
 
+# Tested before resolving, not after. Resolve-Path throws on a path that is not there,
+# and with $ErrorActionPreference set to Stop that threw first — so the message below,
+# which says what to do about it, could never be reached.
+if (-not (Test-Path $HostPath)) {
+    throw "SDM.NativeHost.exe was not found at $HostPath. Build the solution first (dotnet build -c Release), or pass -HostPath."
+}
+
 $resolved = (Resolve-Path $HostPath).Path
-if (-not (Test-Path $resolved)) { throw "SDM.NativeHost.exe was not found at $resolved. Build the solution first." }
 
 # A Chrome extension id is thirty-two letters from a to p. Anything else registers happily
 # and then refuses every connection, with the browser reporting only "host not found".
@@ -64,7 +81,7 @@ $manifestPath = Join-Path (Split-Path $resolved) "$hostName.json"
     path            = $resolved
     type            = 'stdio'
     allowed_origins = @("chrome-extension://$ExtensionId/")
-} | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding utf8
+} | ConvertTo-Json -Depth 4 | Write-Utf8NoBom -Path $manifestPath
 
 "manifest $manifestPath"
 

@@ -177,7 +177,8 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         ILogger logger,
         string address,
         DownloadDestination? destination = null,
-        RequestContext? context = null)
+        RequestContext? context = null,
+        string? suggestedFileName = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(repository);
@@ -188,6 +189,15 @@ public sealed partial class DownloadItemViewModel : ObservableObject, IDisposabl
         DownloadItemViewModel item = new(
             scheduler, repository, shell, logger,
             Guid.NewGuid(), address.Trim(), DateTimeOffset.UtcNow, destination, context);
+
+        // Only what the row shows until the server answers. It is not passed to the
+        // engine, which settles the real name from Content-Disposition — but a name the
+        // browser already knew beats one guessed from a URL that ends in an opaque id,
+        // and it is what the user was looking at when they clicked.
+        if (!string.IsNullOrWhiteSpace(suggestedFileName))
+        {
+            item.FileName = SafeFileName.Sanitize(suggestedFileName);
+        }
 
         item.Persist();
         return item;

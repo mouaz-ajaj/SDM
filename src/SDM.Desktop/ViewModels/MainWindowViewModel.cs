@@ -209,7 +209,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
 
             DownloadItemViewModel item = DownloadItemViewModel.Create(
-                _scheduler, _repository, _shell, _logger, url, context: message.ToRequestContext());
+                _scheduler, _repository, _shell, _logger, url,
+                context: message.ToRequestContext(),
+                suggestedFileName: message.FileName);
 
             Track(item, atTop: true);
             Selected = item;
@@ -362,6 +364,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         ErrorMessage = null;
 
+        // Asked before anything is stopped, because the answer decides whether to stop it
+        // at all. One menu entry away from "Remove from list" sits a button that deletes a
+        // finished download from disk, and a menu is opened by the same click that picks
+        // an entry in it — nothing about that gesture should be able to destroy a file the
+        // user spent an hour fetching.
+        if (removal == TransferRemoval.DeleteFile && !await ConfirmDeletionAsync(item))
+        {
+            return;
+        }
+
         await item.StopAndWaitAsync(keepPartialFile: removal == TransferRemoval.KeepFile);
 
         if (removal == TransferRemoval.DeleteFile)
@@ -375,6 +387,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Refresh();
     }
+
+    /// <summary>
+    /// Names the file and says plainly what will happen to it. A finished transfer owns a
+    /// real file; an unfinished one owns only the partial file it would have resumed from,
+    /// and losing that means starting the download again — different losses, so they are
+    /// described differently rather than behind one word.
+    /// </summary>
+    private Task<bool> ConfirmDeletionAsync(DownloadItemViewModel item) =>
+        item.IsCompleted
+            ? _dialogs.ConfirmAsync(
+                "Delete this file?",
+                $"{item.FileName} will be removed from the list and deleted from disk. This cannot be undone.",
+                "Delete file")
+            : _dialogs.ConfirmAsync(
+                "Discard this download?",
+                $"{item.FileName} is not finished. Removing it deletes what has been downloaded so far, "
+                + "so it would have to start again from the beginning.",
+                "Discard download");
 
     /// <summary>
     /// Clears the rows the user is done with. This used to take everything that was not

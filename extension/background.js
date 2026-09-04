@@ -85,17 +85,32 @@ register("contextMenus", () => {
 register("webRequest", () =>
   chrome.webRequest.onSendHeaders.addListener(
     (details) => {
-      if (details.requestHeaders) {
+      if (details.requestHeaders && worthKeeping(details)) {
         remember(details.url, details.requestHeaders);
       }
     },
-    { urls: ["http://*/*", "https://*/*"] },
+
+    // Only the request types a download can come from. This listener used to watch every
+    // request the browser made — every page, stylesheet, script, font, image and XHR, on
+    // every tab — and write each one's headers to storage. That is a write per request
+    // for the whole time the browser is open, and none of it could ever be read back: a
+    // download is a top-level navigation or a click on a link, never a stylesheet.
+    //
+    // It also meant the Cookie and Authorization header of every site visited sat in one
+    // store for the life of the session, to make one download work.
+    { urls: ["http://*/*", "https://*/*"], types: ["main_frame", "sub_frame", "object", "other"] },
 
     // extraHeaders is required for Cookie and the Sec-* family: without it Chrome hides
     // exactly the headers that decide whether a protected download is allowed.
     ["requestHeaders", "extraHeaders"]
   )
 );
+
+// A download is fetched, not rendered, so the method is the last cheap filter available
+// before anything is written down.
+function worthKeeping(details) {
+  return details.method === "GET";
+}
 
 function register(what, addListener) {
   try {
@@ -192,6 +207,10 @@ function onMenuClicked(info, tab) {
 // closes, which is the right lifetime for a request header anyway.
 const RECENT_MS = 120_000;
 
+// How often the expired captures are swept out. Comfortably shorter than RECENT_MS, so
+// nothing lingers long past the point it could be used.
+const SWEEP_EVERY_MS = 30_000;
+
 function keyFor(url) {
   return "req:" + url;
 }
@@ -207,8 +226,45 @@ async function remember(url, headers) {
 
   try {
     await chrome.storage.session.set({ [keyFor(url)]: { headers: captured, at: Date.now() } });
+    await forgetExpired();
   } catch (error) {
     // Session storage has a size cap. Losing one capture is not worth failing a download.
+  }
+}
+
+// Nothing ever removed a capture. RECENT_MS was applied when reading, so a stale entry
+// was ignored — and kept, along with every other entry, until the browser closed. Each
+// one holds a full header set including the Cookie, so the store grew all session and
+// eventually hit the quota, at which point new captures failed silently and protected
+// downloads went back to answering 403 for no visible reason.
+//
+// Swept on write rather than on a timer: a service worker is stopped when idle, so a
+// timer is not something this file may rely on, and the only moment the store grows is
+// the moment something is added to it.
+// Reading the whole store to sweep it is not something to do on every capture. This
+// resets whenever the worker is stopped, which costs one extra sweep and nothing else.
+let sweptAt = 0;
+
+async function forgetExpired() {
+  if (Date.now() - sweptAt < SWEEP_EVERY_MS) {
+    return;
+  }
+
+  sweptAt = Date.now();
+
+  const everything = await chrome.storage.session.get(null);
+  const cutoff = Date.now() - RECENT_MS;
+  const stale = [];
+
+  for (const [key, value] of Object.entries(everything)) {
+    if (key.startsWith("req:") && (!value || typeof value.at !== "number" || value.at < cutoff)) {
+      stale.push(key);
+    }
+  }
+
+  if (stale.length) {
+    await chrome.storage.session.remove(stale);
+    log("forgot", stale.length, "expired header captures");
   }
 }
 

@@ -104,18 +104,34 @@ internal static class PartialFile
         return null;
     }
 
+    /// <summary>
+    /// Records where a transfer has got to, written whole and moved into place.
+    ///
+    /// A split transfer rewrites this every couple of seconds, and it is the only record
+    /// of its progress — the file itself is pre-allocated at full size, so its length says
+    /// nothing. Written in place, a machine losing power mid-write left a truncated,
+    /// unparseable sidecar, which reads back as no sidecar at all: the partial file is
+    /// then unclaimed and the whole download starts again. That is the one moment this
+    /// file exists to survive.
+    ///
+    /// The temporary name carries a unique suffix because two segments can checkpoint at
+    /// once. Either move wins and either result is a complete, valid snapshot.
+    /// </summary>
     public static void Write(string partialPath, PartialFileMetadata metadata)
     {
+        string destination = partialPath + MetadataSuffix;
+        string temporary = $"{destination}.{Environment.CurrentManagedThreadId:x}.tmp";
+
         try
         {
-            File.WriteAllText(
-                partialPath + MetadataSuffix,
-                JsonSerializer.Serialize(metadata, SerializerOptions));
+            File.WriteAllText(temporary, JsonSerializer.Serialize(metadata, SerializerOptions));
+            File.Move(temporary, destination, overwrite: true);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // Losing the sidecar only costs the ability to resume; it must never fail the
             // transfer that is about to start.
+            TryDelete(temporary);
         }
     }
 
@@ -126,17 +142,53 @@ internal static class PartialFile
     }
 
     /// <summary>
-    /// The download folder and one level below it. Sorting into category sub-folders
-    /// means a partial file is rarely at the top level any more, and a resume that
-    /// cannot find its own partial file silently starts the whole download again.
+    /// The download folder and one level below it — which is exactly as deep as SDM ever
+    /// writes, since sorting adds a single category folder. A resume that cannot find its
+    /// own partial file silently starts the whole download again, so the level below has
+    /// to be searched; nothing deeper does.
+    ///
+    /// It used to search the whole tree. A download folder is where people keep things,
+    /// and walking every directory under it — on every transfer, and again on every retry
+    /// — is work with no possible result.
     /// </summary>
     private static IEnumerable<string> EnumerateMetadata(string directory)
     {
         string pattern = "*" + PartialSuffix + MetadataSuffix;
 
+        foreach (string path in Enumerate(directory, pattern))
+        {
+            yield return path;
+        }
+
+        foreach (string category in EnumerateDirectories(directory))
+        {
+            foreach (string path in Enumerate(category, pattern))
+            {
+                yield return path;
+            }
+        }
+    }
+
+    private static IEnumerable<string> Enumerate(string directory, string pattern)
+    {
         try
         {
-            return Directory.EnumerateFiles(directory, pattern, SearchOption.AllDirectories);
+            // Materialised inside the guard: enumeration is lazy, so a directory that
+            // becomes unreadable would otherwise throw at the caller's foreach, past
+            // every catch meant to make this best-effort.
+            return Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly).ToList();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDirectories(string directory)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(directory).ToList();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
