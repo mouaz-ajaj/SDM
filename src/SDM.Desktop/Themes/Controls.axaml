@@ -307,6 +307,49 @@
     <Setter Property="Opacity" Value="0.55" />
   </Style>
 
+  <!--
+    Destructive button: the one that deletes a file.
+
+    Shaped like the secondary rather than the primary on purpose. It is never the answer
+    being suggested — it is the answer being made available — so it does not wear the
+    brand gradient, and it is not the default button in the dialog it appears in. What it
+    does carry is the danger colour, which appears nowhere else on a button, so it cannot
+    be mistaken for the ordinary way out of a question.
+  -->
+
+  <Style Selector="Button.danger">
+    <Setter Property="Background" Value="{StaticResource SurfaceInsetBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Padding" Value="20,0" />
+    <Setter Property="Height" Value="46" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="Shell"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{StaticResource DangerBrush}"
+                BorderThickness="1"
+                CornerRadius="11"
+                Padding="{TemplateBinding Padding}">
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Content}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+
+  <Style Selector="Button.danger:pointerover /template/ Border#Shell">
+    <Setter Property="Background" Value="{StaticResource DangerBrush}" />
+  </Style>
+
+  <Style Selector="Button.danger:pointerover">
+    <Setter Property="Foreground" Value="#0A121B" />
+  </Style>
+
   <!-- Secondary button: the quieter half of a pair, never competing with the primary -->
 
   <Style Selector="Button.secondary">
