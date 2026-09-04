@@ -68,16 +68,37 @@
   </Target>
 
   <!--
-    And again for publish, which is the only build anyone installs.
+    Publish is a separate problem, and copying the build output into it is the wrong
+    answer twice over.
 
-    The target above runs after Build, and publish does run Build — but it copies into
-    $(OutDir), and publish then assembles its own folder from the items it knows about.
-    The host is not one of them, because it is referenced with ReferenceOutputAssembly
-    set to false. So every published SDM shipped without the executable Chrome launches:
-    the extension was registered against a path with nothing at it, and the only symptom
-    was the browser reporting "host not found".
+    First, publish assembles its own folder from the items it knows about, and the host is
+    not one of them because it is referenced with ReferenceOutputAssembly set to false. So
+    every published SDM shipped without the executable Chrome launches, and the only
+    symptom was the browser reporting "host not found".
+
+    Second — and this is why the fix is a publish rather than a copy — a self-contained
+    SDM carries its own runtime, and a host copied from an ordinary build does not. That
+    executable looks for a .NET installed on the machine, which on the machine of somebody
+    who installed a self-contained application is exactly what is not there. It would fail
+    to start with no message at all, and the browser would report "host not found" again,
+    for a completely different reason.
+
+    So the host is published, with this project's runtime identifier and self-contained
+    setting, into this project's publish folder. The two share a runtime and the files are
+    identical, so writing them twice costs a moment and nothing else.
   -->
-  <Target Name="PublishNativeHost" AfterTargets="Publish" DependsOnTargets="ResolveNativeHostOutput">
-    <Copy SourceFiles="@(NativeHostOutput)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  <Target Name="PublishNativeHost" AfterTargets="Publish">
+    <PropertyGroup>
+      <NativeHostPublishDir>$([System.IO.Path]::GetFullPath('$(PublishDir)'))</NativeHostPublishDir>
+    </PropertyGroup>
+
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\SDM.NativeHost\SDM.NativeHost.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);
+                         TargetFramework=$(TargetFramework);
+                         RuntimeIdentifier=$(RuntimeIdentifier);
+                         SelfContained=$(SelfContained);
+                         PublishSingleFile=false;
+                         PublishDir=$(NativeHostPublishDir)" />
   </Target>
 </Project>

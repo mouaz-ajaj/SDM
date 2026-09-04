@@ -1,0 +1,92 @@
+name: Release
+
+# Pushing a tag is the whole trigger. Nothing is released by merging, so a release is
+# always something somebody decided to do rather than something that happened.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build the installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.200
+
+      # A release is not the place to discover that the suite is red, and a tag is cheap
+      # to move. Everything is verified before anything is packaged.
+      - name: Build
+        run: dotnet build SDM.sln --configuration Release
+
+      - name: Test
+        run: dotnet test SDM.sln --configuration Release --no-build
+
+      - name: Check the browser extension
+        run: node tools/check-extension.mjs
+
+      # Self-contained: whoever downloads this has no reason to have a .NET runtime, and
+      # asking them to install one first is asking them not to bother. Publishing the
+      # desktop application also publishes the native messaging host into the same folder
+      # with the same runtime — see SDM.Desktop.csproj for why that has to be a publish
+      # rather than a copy.
+      - name: Publish
+        run: >
+          dotnet publish src/SDM.Desktop/SDM.Desktop.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --output publish
+
+      # The Windows runner ships Inno Setup, but a runner image is somebody else's
+      # decision and it has changed before. Installing it when it is missing costs a
+      # minute; discovering it is gone during a release costs the release.
+      - name: Build the installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup is not on this runner; installing it."
+            choco install innosetup --no-progress --yes
+          }
+
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup could not be found or installed at $iscc"
+          }
+
+          & $iscc installer\sdm.iss
+        shell: pwsh
+
+      - name: Name the version
+        id: version
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          "version=$version" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      # The published folder as well as the installer. Somebody on a locked-down machine
+      # who cannot run an installer can unzip this and it works — everything SDM needs is
+      # inside it, and it registers its own browser bridge on first run.
+      - name: Package the portable build
+        run: Compress-Archive -Path publish\* -DestinationPath artifacts\SDM-${{ steps.version.outputs.version }}-portable.zip
+        shell: pwsh
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: false
+          body_path: CHANGELOG.md
+          files: |
+            artifacts/SDM-Setup-*.exe
+            artifacts/SDM-*-portable.zip

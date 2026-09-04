@@ -18,6 +18,20 @@ internal static class Program
             return await SelfTest.RunAsync();
         }
 
+        // The installer calls these. It is this executable rather than a script because
+        // script execution is disabled by policy on a great many Windows machines, and
+        // because the manifest holds absolute paths — a user whose name is not in the
+        // installer's code page has a profile folder that a script mangles.
+        if (args.Contains("--register", StringComparer.OrdinalIgnoreCase))
+        {
+            return Registration.Register();
+        }
+
+        if (args.Contains("--unregister", StringComparer.OrdinalIgnoreCase))
+        {
+            return Registration.Unregister();
+        }
+
         NativeMessagingChannel channel = new(
             Console.OpenStandardInput(), Console.OpenStandardOutput());
 

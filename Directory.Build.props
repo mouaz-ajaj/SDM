@@ -8,7 +8,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>SDM Contributors</Authors>
     <Product>Speed Download Manager</Product>
   </PropertyGroup>
