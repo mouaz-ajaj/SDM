@@ -73,7 +73,19 @@ if ($ExtensionId -notmatch '^[a-p]{32}$') {
     Write-Warning "'$ExtensionId' is not a valid extension id. The host will register, and no extension will be able to talk to it."
 }
 
-$manifestPath = Join-Path (Split-Path $resolved) "$hostName.json"
+# Written beside the user's own data, not beside the executable.
+#
+# It used to go into the build output folder, which is the one directory guaranteed not to
+# survive: `dotnet clean`, `git clean -xdf`, or deleting bin\ to force a rebuild all take
+# the manifest with them. The registry key stays behind pointing at a file that is no
+# longer there, so Chrome reports "Specified native messaging host not found" and the only
+# clue is a registry value that looks perfectly correct.
+#
+# The path inside the manifest still names the executable in the build output, and that
+# one is restored by the next build. Only the manifest itself had nowhere safe to live.
+$manifestDirectory = Join-Path $env:LOCALAPPDATA 'SDM'
+$null = New-Item -ItemType Directory -Force -Path $manifestDirectory
+$manifestPath = Join-Path $manifestDirectory "$hostName.json"
 
 @{
     name            = $hostName

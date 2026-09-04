@@ -112,7 +112,16 @@ The browser reports almost every failure as "host not found". In order of likeli
    `SDM.NativeHost.exe`. Rebuilding elsewhere, or moving the repository, invalidates it —
    run the script again.
 3. **The ids disagree.** Compare the id Chrome shows on `chrome://extensions` with
-   `allowed_origins` in `com.sdm.host.json` beside the executable.
+   `allowed_origins` in `%LOCALAPPDATA%\SDM\com.sdm.host.json`.
+
+The manifest lives beside the user's data rather than beside the executable, because the
+executable's folder is a build output: `dotnet clean`, `git clean -xdf`, or deleting
+`bin\` to force a rebuild used to take the manifest with it. The registry key survived,
+still pointing at a file that no longer existed, and the browser reported "host not
+found" while the registration looked perfectly correct.
+
+`& '...\SDM.NativeHost.exe' --selftest` answers the first two of these directly: it
+checks the framing and says whether SDM is running, without starting it.
 
 `chrome://extensions` → **service worker** opens the extension's console, where a failed
 send is logged. `%LOCALAPPDATA%\SDM\logs` holds the application's side of the same

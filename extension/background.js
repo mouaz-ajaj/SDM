@@ -90,19 +90,23 @@ register("webRequest", () =>
       }
     },
 
-    // The request types a download can come out of. Not a stylesheet, a script, a font
-    // or an image: watching every request the browser made meant a write to storage for
-    // each one, all session, and none of those could ever be read back.
+    // The request types something downloadable can arrive as. A stylesheet, a script, a
+    // font or a ping cannot become a download, and watching those meant a write to
+    // storage for every one of them, all session, that could never be read back.
     //
-    // xmlhttprequest stays in, and narrowing it out was a mistake worth naming. It is the
-    // type this whole capture exists for: an application's own API answers the request
-    // its page made, and what makes that request acceptable is often a header nobody
-    // outside the site could name. Dropping it would have quietly undone the feature
-    // while looking like a tidy-up — and the growth it was meant to fix is bounded by the
-    // sweep below, not by this list.
+    // Everything else stays, and trimming this list twice taught the same lesson twice.
+    // xmlhttprequest is what an application's own API answers, with headers nobody
+    // outside the site could name. image and media are what "Save image as" and "Save
+    // video as" act on — and those are the case that fails hardest, because the picture
+    // is usually already in the cache, so saving it makes no fresh request at all: the
+    // only capture that will ever exist is the one from when the page loaded it. Leaving
+    // image out is why every attempt at saving a picture reported no captured headers.
+    //
+    // The storage this was meant to bound is bounded by the sweep below, not by this
+    // list. Narrowing the list was solving the wrong half.
     {
       urls: ["http://*/*", "https://*/*"],
-      types: ["main_frame", "sub_frame", "xmlhttprequest", "object", "other"],
+      types: ["main_frame", "sub_frame", "xmlhttprequest", "image", "media", "object", "other"],
     },
 
     // extraHeaders is required for Cookie and the Sec-* family: without it Chrome hides
@@ -139,31 +143,60 @@ function register(what, addListener) {
 // reads what is written here, so the next question is answered by looking rather than by
 // another guess.
 
-async function setStatus(what, state) {
-  try {
-    const stored = await chrome.storage.session.get(STATUS);
-    const status = stored[STATUS] || {};
+// Every read-modify-write on session storage queues behind the last one.
+//
+// Without this the diagnostics lied, and lied in the most misleading way available. The
+// three register() calls run one after another with nothing awaited between them, so all
+// three read the status object at the same moment — before any of them had written — each
+// added its own key to that same empty object, and each wrote the whole thing back. Last
+// writer won. Two listeners that had registered perfectly well reported "not started",
+// and the activity log lost most of its lines the same way.
+//
+// A panel built to answer "did this actually run?" was answering it wrongly, which is
+// worse than not having one.
+let pending = Promise.resolve();
 
-    status[what] = state;
-    status.startedAt = new Date().toISOString();
+function inTurn(work) {
+  const next = pending.then(work, work);
 
-    await chrome.storage.session.set({ [STATUS]: status });
-  } catch (error) {
-    // Nothing to do: this is the diagnostics, not the feature.
-  }
+  // The chain itself must never end up rejected, or every later turn is skipped.
+  pending = next.then(
+    () => undefined,
+    () => undefined
+  );
+
+  return next;
 }
 
-async function record(line) {
-  try {
-    const stored = await chrome.storage.session.get(EVENTS);
-    const events = stored[EVENTS] || [];
+function setStatus(what, state) {
+  return inTurn(async () => {
+    try {
+      const stored = await chrome.storage.session.get(STATUS);
+      const status = stored[STATUS] || {};
 
-    events.push(new Date().toLocaleTimeString() + "  " + line);
+      status[what] = state;
+      status.startedAt = new Date().toISOString();
 
-    await chrome.storage.session.set({ [EVENTS]: events.slice(-60) });
-  } catch (error) {
-    // Same.
-  }
+      await chrome.storage.session.set({ [STATUS]: status });
+    } catch (error) {
+      // Nothing to do: this is the diagnostics, not the feature.
+    }
+  });
+}
+
+function record(line) {
+  return inTurn(async () => {
+    try {
+      const stored = await chrome.storage.session.get(EVENTS);
+      const events = stored[EVENTS] || [];
+
+      events.push(new Date().toLocaleTimeString() + "  " + line);
+
+      await chrome.storage.session.set({ [EVENTS]: events.slice(-60) });
+    } catch (error) {
+      // Same.
+    }
+  });
 }
 
 function onMenuClicked(info, tab) {
